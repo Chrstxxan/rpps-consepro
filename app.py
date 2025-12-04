@@ -17,13 +17,12 @@ from core.utils import setup_directories
 
 # lista de sites base (pags iniciais dos municipios)
 RPPS_SITES = [
-    {"name": "IPPS Palhoça", "uf": "SC", "url": "https://www.ippa.sc.gov.br/"},
-    {"name": "IPREVILLE Joinville", "uf": "SC", "url": "https://www.ipreville.sc.gov.br/"},
     {"name": "IPI Itajaí", "uf": "SC", "url": "https://ipi.itajai.sc.gov.br/"},
-    {"name": "ISSEM Jaraguá do Sul", "uf": "SC", "url": "https://www.issem.com.br/index.php"},
     {"name": "IPRESBS São Bento do Sul", "uf": "SC", "url": "https://ipresbs.sc.gov.br/"},
-    # Extra opcional para validar robustez e adaptabilidade
     {"name": "FPMU Umuarama", "uf": "PR", "url": "https://fpmu.umuarama.pr.gov.br/"},
+    {"name": "ISSEM Jaraguá do Sul", "uf": "SC", "url": "https://www.issem.com.br/index.php"},
+    {"name": "ISSBLU Blumenau", "uf": "SC", "url": "https://www.issblu.sc.gov.br/"},
+    {"name": "IPREVILLE Joinville", "uf": "SC", "url": "https://www.ipreville.sc.gov.br/"},
 ]
 
 def parse_args():

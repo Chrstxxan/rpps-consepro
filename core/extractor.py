@@ -69,8 +69,11 @@ def extract_text_from_doc(file_path):
     return ""
 
 def detect_meeting_type(text):
-    # identifica se o texto pertence a comite, conselho ou é desconhecido
-    text_lower = text.lower()
+    """
+    Identifica se o texto pertence a comite, conselho ou é desconhecido.
+    A busca agora é limitada aos primeiros 500 caracteres para maior precisão.
+    """
+    text_lower = text[:500].lower() # Analisa apenas o início do documento
     if any(k in text_lower for k in KEYWORDS_COMITE):
         return "Comitê de Investimentos"
     if any(k in text_lower for k in KEYWORDS_CONSELHO):
@@ -78,8 +81,11 @@ def detect_meeting_type(text):
     return "Desconhecido"
 
 def extract_meeting_date(text):
-    # procura uma data valida no conteudo textual
-    text_lower = text.lower()
+    """
+    Procura uma data válida no conteúdo textual.
+    A busca agora é limitada aos primeiros 500 caracteres para evitar datas irrelevantes.
+    """
+    text_lower = text[:500].lower() # Analisa apenas o início do documento
     for pattern in DATE_PATTERNS:
         match = re.search(pattern, text_lower)
         if match:

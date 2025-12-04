@@ -31,27 +31,33 @@ USER_AGENTS = [
 ]
 
 FILENAME_BLACKLIST = [
-    "balanc", "demonstr", "extrato",
-    "portaria", "resol", "estatuto",
-    "membro-", "certificado", "certificacao",
-    "certificado-", "lei", "decreto"
+    "balanc", "demonstr", "extrato", "relatorio", "gestao", "contas", "financeiro", "orcament",
+    "portaria", "resolucao", "resolucoes", "estatuto", "regimento", "normativo",
+    "membro-", "membros", "composicao", "certificado", "certificacao", "certificado-", "credenciamento",
+    "lei", "decreto", "norma", "normas", "legislacao", "instrucao",
+    "boletim", "informativo", "cartilha", "manual", "tutorial", "guia", "orientacao", "folder",
+    "cronograma", "calendario", "recadastramento", "cadastro", "prova-de-vida",
+    "planejamento", "politica", "informe", "censo", "organograma", "fluxograma",
+    "formulario", "requerimento", "solicitacao", "declaracao",
+    "termo", "convenio", "contrato", "licitacao", "edital", "concurso", "adesao",
+    "noticia", "noticias", "evento", "publicacao", "revista",
+    "gabarito", "resultado", "classificacao", "convocacao",
+    "estudo", "atuarial", "governanca"
 ]
 
 def normalize_text(s: str) -> str:
     s = unicodedata.normalize('NFKD', s).encode('ASCII', 'ignore').decode()
-    s = s.lower()
+    s = s.lower().replace('-', ' ') # Replace hyphens with spaces for better matching
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
-def is_probably_meeting_document(filename: str) -> bool:
-    normalized_name = normalize_text(filename)
+def is_probably_meeting_document(text_to_check: str) -> bool:
+    normalized_name = normalize_text(text_to_check)
     for term in FILENAME_BLACKLIST:
         if term in normalized_name:
             return False
-    # só aceita se tiver 'ata' ou 'reuniao'
-    if "ata" in normalized_name or "reuniao" in normalized_name or "reunião" in normalized_name:
-        return True
-    return False
+    # Se passou pela blacklist, consideramos relevante, pois o discovery já filtrou o contexto.
+    return True
 
 BLACKLIST = ["política de investimentos", "politica de investimentos", "policy"]
 
@@ -139,63 +145,54 @@ def extract_document_links(page_url):
     # remove duplicatas mantendo a ordem
     return list(dict.fromkeys(found_links))
 
-def download_files(link_list, out_dir, rpps_info=None):
-    # baixa todos os arquivos válidos e retorna lista de metadados
+def download_files(file_urls, out_dir, rpps_info=None):
+    from urllib.parse import urlparse
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
     downloaded, seen_hashes = [], set()
 
-    for page_link in tqdm(link_list, desc="Baixando arquivos"):
-        doc_links = extract_document_links(page_link)
+    for doc_url in tqdm(file_urls, desc="Baixando arquivos"):
+        try:
+            response = robust_get(doc_url)
+            if not response or not response.content:
+                continue
 
-        for doc_url in doc_links:
-            try:
-                response = robust_get(doc_url)
-                if not response:
-                    continue
+            # Decodifica o nome do arquivo da URL (ex: %C3%A7 -> ç) antes de sanitizar e remover caracteres inválidos
+            from urllib.parse import unquote
+            raw_file_name = urlparse(doc_url).path.split('/')[-1]
+            decoded_file_name = unquote(raw_file_name)
+            file_name = sanitize_filename(decoded_file_name)
+            if not file_name: # Se a URL não tem nome de arquivo (ex: /download.php?id=1)
+                file_name = hashlib.md5(doc_url.encode()).hexdigest()
 
-                file_name = sanitize_filename(Path(urlparse(doc_url).path).name)
+            if not any(file_name.lower().endswith(ext) for ext in (".pdf", ".doc", ".docx", ".html", ".htm")):
+                ctype = response.headers.get("Content-Type", "").lower()
+                if "pdf" in ctype: file_name += ".pdf"
+                elif "word" in ctype or "officedocument" in ctype: file_name += ".docx"
+                elif "html" in ctype: file_name += ".html"
 
-                # 🔴 Ajusta extensão pelo Content-Type se necessário
-                if not file_name.lower().endswith((".pdf", ".doc", ".docx", ".html", ".htm")):
-                    ctype = response.headers.get("Content-Type", "").lower()
-                    if "pdf" in ctype:
-                        file_name += ".pdf"
-                    elif "word" in ctype or "officedocument" in ctype:
-                        file_name += ".docx"
-                    elif "html" in ctype:
-                        file_name += ".html"
+            if not is_probably_meeting_document(file_name):
+                # print(f"DEBUG: Ignorando arquivo por blacklist: {file_name}") # Descomente para depurar
+                continue
 
-                dest_path = out_path / file_name
+            dest_path = out_path / file_name
+            if dest_path.exists(): continue
 
-                # 🔴 FILTRO POR NOME DE ARQUIVO (agora com extensão correta)
-                if not is_probably_meeting_document(file_name):
-                    print(f"Ignorado (não é ata): {file_name}")
-                    continue
+            file_hash = sha1_bytes(response.content)
+            if file_hash in seen_hashes: continue
+            seen_hashes.add(file_hash)
 
-                if dest_path.exists():
-                    continue
+            dest_path.write_bytes(response.content)
 
-                # evita duplicatas por conteúdo
-                file_hash = sha1_bytes(response.content)
-                if file_hash in seen_hashes:
-                    continue
-                seen_hashes.add(file_hash)
-
-                # grava o arquivo no disco
-                with open(dest_path, "wb") as f:
-                    f.write(response.content)
-
-                downloaded.append({
-                    "file_path": str(dest_path),
-                    "source_page": page_link,
-                    "file_url": doc_url,
-                    "rpps": rpps_info["name"] if rpps_info else None,
-                    "uf": rpps_info["uf"] if rpps_info else None,
-                })
-
-            except Exception as e:
-                print(f"Erro ao baixar {doc_url}: {e}")
+            downloaded.append({
+                "file_path": str(dest_path),
+                "source_page": doc_url, # A própria URL é a fonte
+                "file_url": doc_url,
+                "rpps": rpps_info["name"] if rpps_info else None,
+                "uf": rpps_info["uf"] if rpps_info else None,
+            })
+        except Exception as e:
+            print(f"Erro ao processar {doc_url}: {e}")
 
     return downloaded
