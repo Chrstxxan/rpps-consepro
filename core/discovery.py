@@ -1,4 +1,4 @@
-# discovery.py
+# core/discovery.py
 """
 Discovery universal para RPPS — heurística + Selenium interativo.
 Substitua seu core/discovery.py por este arquivo.
@@ -10,7 +10,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver import ActionChains
-from urllib.parse import urljoin, urlparse, unquote
+from urllib.parse import urljoin, urlparse
 from collections import deque
 from .downloader import is_probably_meeting_document # Import the filtering function
 import requests
@@ -24,7 +24,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Config
 # ----------------------------
 SELENIUM_SCROLL_STEPS = 4
-SELENIUM_CLICK_TOP_N = 8   # aumentei para não perder paginação/menu
+SELENIUM_CLICK_TOP_N = 6
 SELENIUM_CLICK_LEVELS = 2
 SELENIUM_WAIT_SHORT = 0.6
 SELENIUM_WAIT_LONG = 2.5
@@ -242,15 +242,14 @@ def element_text_score(text: str, href: str = "") -> int:
     
     # Pontuação mais agressiva para combinações-chave
     full_text = t + " " + h
-    # PRIORIDADE: 'ata' deve ganhar sempre, mesmo que 'comit' apareça sozinho ao lado.
-    if "ata" in full_text and ("comit" in full_text or "invest" in full_text or "consel" in full_text):
-        score += 300
-    elif "ata" in full_text:
-        score += 250
-    elif "comit" in full_text and "invest" in full_text:
+    if "ata" in full_text and "comite" in full_text and "invest" in full_text:
+        score += 150
+    elif "comite" in full_text and "invest" in full_text:
         score += 120
-    elif "comit" in full_text or "consel" in full_text:
+    elif "ata" in full_text and ("comite" in full_text or "conselho" in full_text):
         score += 80
+    elif "ata" in full_text:
+        score += 50
 
     return score
 
@@ -288,37 +287,11 @@ def expand_all_menus(driver):
         # hover
         try:
             actions = ActionChains(driver)
-            menu_items = driver.find_elements(By.CSS_SELECTOR, "nav li, nav a, .menu li, .menu a, li[class*='menu'], a[class*='menu']")
+            menu_items = driver.find_elements(By.CSS_SELECTOR, "nav li, nav a, .menu li, .menu a")
             for item in menu_items:
                 try:
                     actions.move_to_element(item).perform()
                     time.sleep(0.02)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-        # Tenta expandir acordeões comuns (wordpress / temas)
-        try:
-            accordions = driver.find_elements(By.CSS_SELECTOR, "a, button, div[class*='accordion'], h3, h4, li")
-            for a in accordions:
-                try:
-                    txt = (a.text or "").lower()
-                    if not txt:
-                        continue
-                    if re.search(r"\b20\d{2}\b", txt) or "ano" in txt or "ata" in txt:
-                        try:
-                            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", a)
-                            try:
-                                a.click()
-                            except Exception:
-                                try:
-                                    driver.execute_script("arguments[0].click();", a)
-                                except Exception:
-                                    pass
-                            time.sleep(0.35)
-                        except Exception:
-                            pass
                 except Exception:
                     pass
         except Exception:
@@ -445,29 +418,6 @@ def click_top_candidates_and_extract(driver, base_url, levels=1):
                 wait_dom_change(driver, timeout=SELENIUM_WAIT_LONG)
                 html_after = driver.page_source
                 results.extend(extract_pdfs_and_file_links_from_html(base_url, html_after))
-
-                # Tenta detectar paginação e clicar (comum em listas de atas)
-                try:
-                    pag_buttons = driver.find_elements(By.CSS_SELECTOR, "a.page-numbers, a[rel='next'], a.next, li.pagination a, ul.pagination a")
-                    for p in pag_buttons:
-                        try:
-                            if element_is_visible(driver, p):
-                                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", p)
-                                try:
-                                    p.click()
-                                except Exception:
-                                    try:
-                                        driver.execute_script("arguments[0].click();", p)
-                                    except Exception:
-                                        pass
-                                wait_dom_change(driver, timeout=1.2)
-                                html_p = driver.page_source
-                                results.extend(extract_pdfs_and_file_links_from_html(base_url, html_p))
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
             except Exception:
                 continue
         time.sleep(0.25)
@@ -504,21 +454,11 @@ def selenium_extract_atas_from_year_page(url, driver): # Now accepts driver
         # Expand year accordions
         try:
             anchors = driver.find_elements(By.CSS_SELECTOR, "a[href*='#ano'], a[href*='#Ano'], a[href*='#ANO']")
-            # Adicional: expand more generic accordion controls
-            more_controls = driver.find_elements(By.CSS_SELECTOR, "a, button, div[class*='accordion'], h3, h4, li")
-            anchors.extend(more_controls)
             for a in anchors:
                 try:
                     driver.execute_script("arguments[0].scrollIntoView({block:'center'});", a)
-                    try:
-                        a.click()
-                        time.sleep(0.45)
-                    except Exception:
-                        try:
-                            driver.execute_script("arguments[0].click();", a)
-                            time.sleep(0.45)
-                        except Exception:
-                            pass
+                    a.click()
+                    time.sleep(0.5)
                 except Exception:
                     pass
 
@@ -557,13 +497,7 @@ def selenium_extract_atas_from_year_page(url, driver): # Now accepts driver
 
                         try:
                             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", c)
-                            try:
-                                c.click()
-                            except Exception:
-                                try:
-                                    driver.execute_script("arguments[0].click();", c)
-                                except Exception:
-                                    pass
+                            c.click()
                             time.sleep(0.8)
                         except Exception:
                             pass
@@ -592,6 +526,7 @@ def selenium_extract_atas_from_year_page(url, driver): # Now accepts driver
                                                 final = resolve_redirect_to_file(href)
                                                 if final:
                                                     # Filter final URL's filename
+                                                    from urllib.parse import unquote
                                                     raw_file_name = urlparse(final).path.split('/')[-1]
                                                     decoded_file_name = unquote(raw_file_name)
                                                     if is_probably_meeting_document(decoded_file_name):
@@ -621,35 +556,6 @@ def selenium_extract_atas_from_year_page(url, driver): # Now accepts driver
                 found.add(final)
         except Exception:
             pass
-
-        # Adicional: clicar paginação se existir (varias páginas de atas)
-        try:
-            pag_selectors = ["a.page-numbers", "ul.pagination a", "li.pagination a", "a[rel='next']", "a.next"]
-            for sel in pag_selectors:
-                try:
-                    pag_buttons = driver.find_elements(By.CSS_SELECTOR, sel)
-                    for p in pag_buttons:
-                        try:
-                            if not element_is_visible(driver, p):
-                                continue
-                            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", p)
-                            try:
-                                p.click()
-                            except Exception:
-                                try:
-                                    driver.execute_script("arguments[0].click();", p)
-                                except Exception:
-                                    pass
-                            time.sleep(0.9)
-                            htmlp = driver.page_source
-                            found.update(extract_pdfs_and_file_links_from_html(url, htmlp))
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
     except Exception as e:
         print(f"[DISCOVERY] Erro geral em selenium_extract_atas_from_year_page para a URL {url}: {e}")
 
