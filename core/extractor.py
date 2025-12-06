@@ -114,6 +114,13 @@ def extract_metadata_from_files(downloaded_files, rpps_info=None):
         meeting_type = detect_meeting_type(text)
         meeting_date = extract_meeting_date(text)
 
+                # filtro extra: se não parece ata / reunião, descarta cedo
+        header = (text[:400] or "").lower()
+        if meeting_type == "Desconhecido" and "ata" not in header and "reuni" not in header:
+            # pula esse arquivo, provavelmente é código de ética, relatório etc.
+            continue
+
+
         # salva o texto extraido em .txt pra analise posterior
         try:
             txt_path = file_path.with_suffix(".txt")
