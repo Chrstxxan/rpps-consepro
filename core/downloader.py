@@ -94,7 +94,8 @@ def sha1_bytes(b: bytes) -> str:
     return hashlib.sha1(b).hexdigest()
 
 def robust_request(method: str, url: str, referer: str | None = None,
-                   retries: int = 3, timeout: int = 20, stream: bool = False):
+                   retries: int = 3, timeout: int = 20, stream: bool = False,
+                   data: dict | None = None):
     last_err = None
     for attempt in range(retries):
         try:
@@ -106,6 +107,7 @@ def robust_request(method: str, url: str, referer: str | None = None,
                 verify=False,
                 allow_redirects=True,
                 stream=stream,
+                data=data,
             )
             resp.raise_for_status()
             return resp
@@ -363,13 +365,160 @@ def download_single_url(doc_url: str,
     # 4) se chegou aqui, é algum tipo binário desconhecido, tenta salvar mesmo assim
     return _download_binary_response(resp, doc_url, out_path, rpps_info, seen_hashes)
 
+def download_detail_page(detail_url: str,
+                         out_path: Path,
+                         rpps_info: dict,
+                         seen_hashes: set):
+    """
+    Resolver genérico para páginas de detalhe do tipo:
+        detail://<original_url>|<id>
+    Independente do site.
+    """
+
+    # ------------------------------------------------------------
+    # 0) Decodificar detail://<page_url>|<file_id>
+    # ------------------------------------------------------------
+    try:
+        raw = detail_url.replace("detail://", "")
+        page_url, file_id = raw.split("|", 1)
+    except:
+        print(f"[DOWNLOADER] detail:// inválido: {detail_url}")
+        return None
+
+    # ------------------------------------------------------------
+    # ⚠️ REGRA UNIVERSAL (SEM HARDCODE):
+    # Se a própria page_url já contém id=<file_id>,
+    # então NÃO existe página de detalhe intermediária.
+    # É um link direto que deve ser tratado como GET.
+    # ------------------------------------------------------------
+    parsed = urlparse(page_url)
+    qs = parsed.query.lower()
+
+    if f"id={file_id}" in qs:
+        return download_single_url(page_url, out_path, rpps_info, seen_hashes)
+
+    # ------------------------------------------------------------
+    # 1) Baixa a página HTML original
+    # ------------------------------------------------------------
+    resp = robust_request("GET", page_url)
+    if not resp or not resp.text:
+        return None
+    html = resp.text
+    soup = BeautifulSoup(html, "lxml")
+
+    # ------------------------------------------------------------
+    # 2) Extrair possíveis endpoints de download
+    # ------------------------------------------------------------
+    candidates = set()
+
+    # 2.1 forms
+    for f in soup.find_all("form"):
+        action = f.get("action")
+        if action:
+            candidates.add(urljoin(page_url, action))
+
+    # 2.2 onclick JS contendo "download"
+    onclicks = re.findall(r"['\"]([^'\"]*download[^'\"]*)['\"]", html, flags=re.I)
+    for oc in onclicks:
+        if ".php" in oc:
+            candidates.add(urljoin(page_url, oc))
+
+    # 2.3 window.location / location.href
+    locs = re.findall(r"location\s*=\s*['\"]([^'\"]+)['\"]", html, flags=re.I)
+    for loc in locs:
+        if ".php" in loc:
+            candidates.add(urljoin(page_url, loc))
+
+    # 2.4 URLs externas contendo "download"
+    urls_js = re.findall(r"https?://[^\"']+(?:download|baixar)[^\"']*", html, flags=re.I)
+    for u in urls_js:
+        candidates.add(u)
+
+    # ------------------------------------------------------------
+    # 3) Heurística genérica (sem mencionar RPPS)
+    # ------------------------------------------------------------
+    common_paths = [
+        "downloads.php",
+        "download.php",
+        "downloadsget.php",
+        "baixar.php",
+        "getfile.php",
+    ]
+    base = page_url.rsplit("/", 1)[0]
+    for p in common_paths:
+        candidates.add(urljoin(base + "/", p))
+
+    # ------------------------------------------------------------
+    # 4) Limpeza dos candidatos (GENÉRICO)
+    # ------------------------------------------------------------
+    cleaned = set()
+    for endpoint in candidates:
+        if not endpoint:
+            continue
+
+        ep = endpoint.strip()
+
+        # ignora redes sociais
+        if any(s in ep for s in [
+            "facebook.com", "instagram.com", "twitter.com", "x.com",
+            "linkedin.com", "whatsapp.com"
+        ]):
+            continue
+
+        parsed_ep = urlparse(ep)
+        qs_ep = parsed_ep.query.lower()
+
+        # se tem query mas não possui parâmetro de arquivo → é navegação
+        has_file_param = any(k in qs_ep for k in ["id=", "codigo=", "file=", "arquivo=", "doc="])
+        if qs_ep and not has_file_param:
+            continue
+
+        cleaned.add(ep)
+
+    candidates = cleaned
+    if not candidates:
+        return None
+
+    # ------------------------------------------------------------
+    # 5) Tentar POST com payload genérico
+    # ------------------------------------------------------------
+    payload_variants = [
+        {"id": file_id},
+        {"codigo": file_id},
+        {"file": file_id},
+        {"arquivo": file_id},
+        {"doc": file_id},
+        {"op": "download", "codigo": file_id},
+        {"acao": "download", "codigo": file_id},
+    ]
+
+    for endpoint in candidates:
+        for payload in payload_variants:
+            resp_file = robust_request(
+                "POST",
+                endpoint,
+                referer=page_url,
+                timeout=20,
+                stream=False,
+                data=payload,
+            )
+            if not resp_file:
+                continue
+
+            ct = (resp_file.headers.get("Content-Type") or "").lower()
+            if any(k in ct for k in ["pdf", "octet-stream", "binary", "msword", "officedocument"]):
+                return _download_binary_response(resp_file, endpoint, out_path, rpps_info, seen_hashes)
+
+    return None
+
 # ----------------------------------------------------------------------
 # Função principal usada pelo app.py
 # ----------------------------------------------------------------------
 def download_files(file_urls, out_dir, rpps_info=None):
     """
-    Recebe uma lista de URLs (vinda do discovery) e tenta baixar tudo que for ata de reunião.
-    Retorna a lista de dicts com metadados básicos de arquivo baixado.
+    Recebe lista de URLs vindas do discovery:
+      - URLs diretas de documentos
+      - detail://<page>|<id>  (páginas de detalhe para resolver via POST)
     """
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -379,9 +528,56 @@ def download_files(file_urls, out_dir, rpps_info=None):
 
     for doc_url in tqdm(file_urls, desc="Baixando arquivos"):
         try:
-            entry = download_single_url(str(doc_url), out_path, rpps_info, seen_hashes)
+            doc_url = str(doc_url)
+
+            # --------------------------------------------------------
+            # 0) FILTROS GENÉRICOS PRÉ-DOWNLOAD (não hardcoded)
+            # --------------------------------------------------------
+            # ignora redes sociais
+            if any(s in doc_url for s in [
+                "facebook.com", "instagram.com", "twitter.com", "x.com",
+                "linkedin.com", "whatsapp.com"
+            ]):
+                continue
+
+            parsed = urlparse(doc_url)
+            path = parsed.path.lower()
+            qs = parsed.query.lower()
+
+            # --------------------------------------------------------
+            # 1) REGRA ESSENCIAL DO ISSEM (GENÉRICA, SEM HARDCODE):
+            #    Se tem id= e NÃO é detail:// → é download direto via GET.
+            # --------------------------------------------------------
+            if not doc_url.startswith("detail://") and "id=" in qs:
+                entry = download_single_url(doc_url, out_path, rpps_info, seen_hashes)
+                if entry:
+                    downloaded.append(entry)
+                continue  # *** NÃO DEIXA CAIR NO POST! ***
+
+            # --------------------------------------------------------
+            # 2) Ignora URLs sem extensão que são claramente de navegação
+            # --------------------------------------------------------
+            if not doc_url.startswith("detail://"):
+                if not any(path.endswith(ext) for ext in DOC_EXTS):
+                    nav_tokens = ["cat=", "y=", "m=", "ano=", "mes=", "page=", "p="]
+                    if any(tok in qs for tok in nav_tokens):
+                        continue
+
+            # --------------------------------------------------------
+            # 3) DETAIL:// → POST dinâmico
+            # --------------------------------------------------------
+            if doc_url.startswith("detail://"):
+                entry = download_detail_page(doc_url, out_path, rpps_info, seen_hashes)
+
+            else:
+                # ----------------------------------------------------
+                # 4) GET + follow normal
+                # ----------------------------------------------------
+                entry = download_single_url(doc_url, out_path, rpps_info, seen_hashes)
+
             if entry:
                 downloaded.append(entry)
+
         except Exception as e:
             print(f"Erro ao processar {doc_url}: {e}")
 

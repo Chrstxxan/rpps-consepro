@@ -1,3 +1,4 @@
+
 # core/discovery.py
 """
 Discovery universal para RPPS — heurística + Selenium interativo (V3).
@@ -460,19 +461,21 @@ def selenium_extract_links(url: str):
 def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
     """
     Faz crawling BFS no site:
-      - só segue links do mesmo domínio
-      - prioriza links com forte relação com atas/reuniões/comitê
-      - identifica páginas-hub (downloads.php?cat=7 etc.)
-      - usa Selenium como fallback quando estático não acha nada
-    Retorna lista de URLs de arquivos OU páginas-hub para o downloader.
+      - segue links internos
+      - detecta hubs (?cat=7 etc)
+      - identifica páginas de detalhe (?id=123) que tipicamente exigem POST para baixar documentos
+      - usa Selenium como fallback quando necessário
+
+    Retorna lista de:
+      - URLs diretas de documentos
+      - URLs especiais: detail://<base>|<id>  → para o downloader resolver via POST
     """
     base_domain = domain_of(base_url)
     all_found_files = []
 
     queue = deque([(base_url, 0)])
     visited = set()
-
-    driver = make_driver()  # driver único por domínio (se falhar, fica None)
+    driver = make_driver()
 
     while queue and len(visited) < MAX_PAGES_FROM_SITE:
         url, depth = queue.popleft()
@@ -489,19 +492,59 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
             continue
 
         print(f"[DISCOVERY] Visitando {url} (profundidade {depth})")
+        lower_url = url.lower()
 
-        # 1) Tenta HTML estático
+        # ------------------------------------------------------------
+        # 0) DETECTOR UNIVERSAL DE PÁGINA DE DETALHE (?id=N)
+        # ------------------------------------------------------------
+        if "id=" in lower_url and "cat=" not in lower_url:
+            parsed_path = urlparse(url).path
+            if not any(parsed_path.lower().endswith(ext) for ext in DOC_EXTS):
+                m = re.search(r"id=(\d+)", lower_url)
+                if m:
+                    file_id = m.group(1)
+                    special = f"detail://{url}|{file_id}"
+                    if special not in all_found_files:
+                        all_found_files.append(special)
+                pass
+
+        # ------------------------------------------------------------
+        # 1) HTML estático normal
+        # ------------------------------------------------------------
         resp = safe_get(url)
         html = resp.text if resp else ""
 
-        # 2) Extrai docs estático
+        # ------------------------------------------------------------
+        # >>> ISSEM PATCH — DETECÇÃO AUTOMÁTICA DE PAGINAÇÃO CAT → ID
+        # ------------------------------------------------------------
+        if "downloads.php?cat=" in lower_url and html:
+            for a in BeautifulSoup(html, "lxml").find_all("a", href=True):
+                href = a["href"].strip()
+                if "id=" in href:
+                    abs_url = urljoin(url, href)
+                    m = re.search(r"id=(\d+)", abs_url)
+                    if m:
+                        file_id = m.group(1)
+                        special = f"detail://{abs_url}|{file_id}"
+                        if special not in all_found_files:
+                            print(f"[PATCH FOR CAT.PHP] Detectado ID {file_id} → {abs_url}")
+                            all_found_files.append(special)
+        # ------------------------------------------------------------
+
+        # ------------------------------------------------------------
+        # 2) documentos estaticamente encontrados
+        # ------------------------------------------------------------
         static_docs = extract_docs_from_html(url, html)
         for d in static_docs:
             if d not in all_found_files:
                 all_found_files.append(d)
 
-        # 3) Se não achou nada e URL é muito promissora → tenta Selenium
-        looks_promising = any(k in url.lower() for k in ["ata", "reuni", "comit", "invest"])
+        # ------------------------------------------------------------
+        # 3) fallback Selenium
+        # ------------------------------------------------------------
+        looks_promising = any(
+            k in lower_url for k in ["ata", "reuni", "comit", "invest"]
+        )
         if driver and looks_promising and not static_docs:
             html_dyn = selenium_render_and_get_html(driver, url)
             if html_dyn:
@@ -511,8 +554,10 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
                     if d not in all_found_files:
                         all_found_files.append(d)
 
-        # 4) Descobrir próximos links internos a partir do HTML (estático ou dinâmico se tiver)
-        html_for_links = html
+        # ------------------------------------------------------------
+        # 4) links internos para continuar o BFS
+        # ------------------------------------------------------------
+        html_for_links = html or ""
         if not html_for_links and driver:
             html_for_links = selenium_render_and_get_html(driver, url) or ""
 
@@ -534,5 +579,4 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
         if u not in seen:
             seen.add(u)
             final.append(u)
-
     return final

@@ -17,13 +17,19 @@ from core.utils import setup_directories
 
 # lista de sites base (pags iniciais dos municipios)
 RPPS_SITES = [
-    {"name": "IPI Itajaí", "uf": "SC", "url": "https://ipi.itajai.sc.gov.br/atas-comite-de-investimentos"},
     {"name": "IPRESBS São Bento do Sul", "uf": "SC", "url": "https://ipresbs.sc.gov.br/atas-reunioes-categorias/comite-de-investimentos/"},
-    {"name": "FPMU Umuarama", "uf": "PR", "url": "https://fpmu.umuarama.pr.gov.br/atas-do-comite-apr"},
-    {"name": "ISSEM Jaraguá do Sul", "uf": "SC", "url": "https://www.issem.com.br/downloads.php?cat=7"},
+    {"name": "IPI Itajaí", "uf": "SC", "url": "https://ipi.itajai.sc.gov.br/atas-comite-de-investimentos"},
     {"name": "ISSBLU Blumenau", "uf": "SC", "url": "https://www.issblu.sc.gov.br/pagina/90/comite-de-investimento/sub-pagina/13/"},
     {"name": "IPREVILLE Joinville", "uf": "SC", "url": "https://www.ipreville.sc.gov.br/pagina/56/comite-de-investimentos"},
-    {"name": "NavegantesPrev Navegantes", "uf": "SC", "url": "https://www.navegantesprev.sc.gov.br/"}
+    {"name": "NavegantesPrev Navegantes", "uf": "SC", "url": "https://www.navegantesprev.sc.gov.br/"},
+    {"name": "São José", "uf": "SC", "url": "https://www.sjprev.sc.gov.br/imprensa/categorias/Atas/1/2025"},
+    {"name": "Rio do Sul Prev", "uf": "SC", "url": "https://riodosulprev.sc.gov.br/agenda/visualiza/4"},
+    {"name": "IPPA Palhoça", "uf": "SC", "url": "https://www.ippa.sc.gov.br/publicacoes"},
+    {"name": "SIMPREVI Chapecó", "uf": "SC", "url": "https://www.chapeco.sc.gov.br/simprevi/comite-de-investimentos"},
+    {"name": "IPRECON Concórdia", "uf": "SC", "url": "https://iprecon.sc.gov.br/atas-comite-de-investimentos/"},
+    {"name": "IBPREV Brusque", "uf": "SC", "url": "https://ibprev.sc.gov.br/atas/?categoria=comite-de-investimentos"},
+    {"name": "FPMU Umuarama", "uf": "PR", "url": "https://fpmu.umuarama.pr.gov.br/atas-do-comite-apr"},
+    {"name": "ISSEM Jaraguá do Sul", "uf": "SC", "url": "https://www.issem.com.br/downloads.php?cat=7"}
 ]
 
 def parse_args():
