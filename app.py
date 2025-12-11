@@ -1,41 +1,65 @@
 """
-esse é o script principal que integra todas as etapas do projeto:
-- busca links das atas
-- baixa os arquivos
-- extrai os metadados (tipo, data, etc)
-- gera relatórios em jsonl e txt organizados
+Script principal que integra todas as etapas do projeto:
+- discovery paralelo
+- download paralelo dos documentos
+- extração de metadados
+- geração de relatórios consolidados
 """
 
 import argparse
 import json
 from pathlib import Path
+
 from core.discovery import crawl_site
-from core.downloader import download_files
+from core.downloader import download_files_parallel
 from core.extractor import extract_metadata_from_files
 from core.metadata import save_metadata
 from core.utils import setup_directories
+from core.parallel_runner import run_discovery_parallel
 
-# lista de sites base (pags iniciais dos municipios)
+# lista de sites base (pags de atas dos municipios)
 RPPS_SITES = [
     {"name": "IPRESBS São Bento do Sul", "uf": "SC", "url": "https://ipresbs.sc.gov.br/atas-reunioes-categorias/comite-de-investimentos/"},
     {"name": "IPI Itajaí", "uf": "SC", "url": "https://ipi.itajai.sc.gov.br/atas-comite-de-investimentos"},
     {"name": "ISSBLU Blumenau", "uf": "SC", "url": "https://www.issblu.sc.gov.br/pagina/90/comite-de-investimento/sub-pagina/13/"},
     {"name": "IPREVILLE Joinville", "uf": "SC", "url": "https://www.ipreville.sc.gov.br/pagina/56/comite-de-investimentos"},
     {"name": "NavegantesPrev Navegantes", "uf": "SC", "url": "https://www.navegantesprev.sc.gov.br/"},
-    {"name": "São José", "uf": "SC", "url": "https://www.sjprev.sc.gov.br/imprensa/categorias/Atas/1/2025"},
     {"name": "Rio do Sul Prev", "uf": "SC", "url": "https://riodosulprev.sc.gov.br/agenda/visualiza/4"},
-    {"name": "IPPA Palhoça", "uf": "SC", "url": "https://www.ippa.sc.gov.br/publicacoes"},
     {"name": "SIMPREVI Chapecó", "uf": "SC", "url": "https://www.chapeco.sc.gov.br/simprevi/comite-de-investimentos"},
     {"name": "IPRECON Concórdia", "uf": "SC", "url": "https://iprecon.sc.gov.br/atas-comite-de-investimentos/"},
     {"name": "IBPREV Brusque", "uf": "SC", "url": "https://ibprev.sc.gov.br/atas/?categoria=comite-de-investimentos"},
+    {"name": "IPRESF São Francisco do Sul", "uf": "SC", "url": "https://www.ipresf.sc.gov.br/comissao/comissao/documento-auxiliar/7/14/"},
+    {"name": "PREVBIGUAÇU Biguaçu", "uf": "SC", "url": "http://prevbiguacu.sc.gov.br/atas-c-i-2018"},
+    {"name": "IPRERIO Rio Negrinho", "uf": "SC", "url": "https://www.iprerio.sc.gov.br/comite-investimento"},
+    {"name": "INDAPREV Indaial", "uf": "SC", "url": "https://indaprev.com.br/comite-de-investimento/"},
+    {"name": "IPASC Caçador", "uf": "SC", "url": "https://www.ipasc.cacador.sc.gov.br/paginas.php?p=5"},
+    {"name": "IMPRES Joaçaba", "uf": "SC", "url": "https://impres.sc.gov.br/governanca-corporativa/comite-de-investimentos/atas-de-reunioes/"},
+    {"name": "Camboriú", "uf": "SC", "url": "https://previdencia.camboriu.sc.gov.br/documento?DocumentoSearchForm%5Bid_documento_categoria%5D=4&DocumentoSearchForm%5Bq%5D="},
+    {"name": "IPRESP Balneário Piçarras", "uf": "SC", "url": "https://ipresp.sc.gov.br/governanca-corporativa/conselho-administrativo/atas-de-reunioes/"},
+    {"name": "Pomerode", "uf": "SC", "url": "https://pomerode.atende.net/cidadao/pagina/atas-de-reunioes-do-comite-de-investimentos-fap"},
+    {"name": "LAGESPREVI Lages", "uf": "SC", "url": "https://www.lagesprevi.sc.gov.br/admin-financeiro/12/atas-comite-de-investimentos"},
+    {"name": "IÇARAPREV Içara", "uf": "SC", "url": "https://icaraprev.sc.gov.br/atas/"},
+    {"name": "IPREVE Barra Velha", "uf": "SC", "url": "https://iprevebarravelha.sc.gov.br/artigo/32782/atas-de-reuniao-do-comite-de-investimentos"},
+    {"name": "ICPREV Canoinhas", "uf": "SC", "url": "https://icprev.sc.gov.br/conselhos-e-comite/comite-de-investimento"},
+    {"name": "IPREVIHO Herval d'Oeste", "uf": "SC", "url": "https://ipreviho.sc.gov.br/transparencia"},
+    {"name": "Curitibanos", "uf": "SC", "url": "https://curitibanos.sc.gov.br/estrutura/pagina-6334/pro-gestao/comite-de-investimentos-comin/atas-comin/"},
+    {"name": "IPMM Mafra", "uf": "SC", "url": "https://ipmm.sc.gov.br/atas-e-avaliacoes-do-comin"},
+    {"name": "TAIOPREV Taió", "uf": "SC", "url": "https://taioprev.sc.gov.br/1-3-2-atas/"},
+    {"name": "Itaiópolis", "uf": "SC", "url": "https://itaiopolis.sc.gov.br/"},
+    {"name": "Antonio Carlos", "uf": "SC", "url": "https://antoniocarlos.sc.gov.br/pagina-4365/pagina-23129/"},
+    {"name": "IPBS Balneário Barra do Sul", "uf": "SC", "url": "https://ipbs.sc.gov.br/?pagina=Atas%20Comite%20de%20Investimentos.php&report=2025"},
+    {"name": "IPRECAL Campo Alegre", "uf": "SC", "url": "https://www.iprecal.sc.gov.br/pagina/109/atas-das-reunioes-do-comite-de-investimento"},
+    {"name": "Nova Trento", "uf": "SC", "url": "https://novatrento.sc.gov.br/iprevent-comite-de-investimentos/"},
+    {"name": "Salto Veloso", "uf": "SC", "url": "https://saltoveloso.sc.gov.br/estrutura/pagina-3955/pagina-27388/"},
+    {"name": "RPPS Macieira", "uf": "SC", "url": "https://macieira.sc.gov.br/pagina-12742/"},
     {"name": "FPMU Umuarama", "uf": "PR", "url": "https://fpmu.umuarama.pr.gov.br/atas-do-comite-apr"},
-    {"name": "ISSEM Jaraguá do Sul", "uf": "SC", "url": "https://www.issem.com.br/downloads.php?cat=7"}
+    {"name": "IPREV Santa Catarina", "uf": "SC", "url": "https://www.iprev.sc.gov.br/atas-do-comite-de-investimento/"},
+    {"name": "IPPA Palhoça", "uf": "SC", "url": "https://www.ippa.sc.gov.br/publicacoes"}
 ]
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Coleta Autônoma de Atas de RPPS")
-    # agora o default aponta para a pasta "data" dentro do projeto
-    project_root = Path(__file__).parent  # pega a pasta do projeto automaticamente
+    project_root = Path(__file__).parent
     parser.add_argument(
         "--out",
         default=str(project_root / "data"),
@@ -49,60 +73,70 @@ def main():
     base_out = Path(args.out)
     base_out.mkdir(parents=True, exist_ok=True)
 
-    print("Iniciando busca de atas de RPPS...\n")
+    print("\nIniciando discovery paralelo...\n")
 
-    all_metadata = []  # guarda todos os metadados consolidados
+    # -------------------------------
+    # DISCOVERY PARALELO (fase 1)
+    # -------------------------------
+    all_sites_links = run_discovery_parallel(
+    RPPS_SITES,
+    crawl_site,
+    4
+)
 
-    for site in RPPS_SITES:
-        # adiciona a tag "(Extra)" se o nome do RPPS contiver "umuarama"
-        tag = " (Extra)" if "Umuarama" in site["name"] else ""
-        print(f"Buscando atas em: {site['name']} ({site['uf']}){tag}")
+    print("\nDiscovery concluído!\n")
 
-        # cria o diretorio organizado para o RPPS atual
-        base_path = setup_directories(site["name"], site["uf"], base_out)
+    # -------------------------------
+    # DOWNLOAD + METADADOS (fase 2)
+    # -------------------------------
+    all_metadata = []
 
-        # descobre links que contenham atas
-        links = crawl_site(site["url"])
+    for site_name, links in all_sites_links.items():
+        site = next(s for s in RPPS_SITES if s["name"] == site_name)
+        print(f"[OK] {site['name']} → {len(links)} links encontrados")
 
         if not links:
             print(f"Nenhuma ata encontrada para {site['name']}. Pulando...\n")
             continue
 
-        # faz o download dos arquivos
-        downloaded_files = download_files(links, base_path, site)
+        base_path = setup_directories(site["name"], site["uf"], base_out)
+
+        # DOWNLOAD PARALELO
+        downloaded_files = download_files_parallel(
+            links,
+            base_path,
+            rpps_info=site,
+            workers=8
+        )
 
         # extrai metadados e analisa tipo e data das reuniões
         metadata = extract_metadata_from_files(downloaded_files, site)
-
-        # acumula todos os metadados pra gerar o relatorio geral no fim
         all_metadata.extend(metadata)
 
-        # define onde salvar os relatorios individuais
-        output_dir = base_path / "relatorios"
-        output_dir.mkdir(exist_ok=True)
+        # RELATÓRIO INDIVIDUAL
+        out_dir = base_path / "relatorios"
+        out_dir.mkdir(exist_ok=True)
+        save_metadata(metadata, out_dir)
 
-        # salva relatorios em JSONL e TXT (por RPPS)
-        save_metadata(metadata, output_dir)
+        print(f"✔ {site['name']} finalizado ({len(downloaded_files)} arquivos)\n")
 
-        print(f"Concluído: {site['name']} ({len(downloaded_files)} arquivos)\n")
-
-    # cria os relatorios consolidados (geral de todos os RPPS)
+    # -------------------------------
+    # RELATÓRIO CONSOLIDADO
+    # -------------------------------
     merged_jsonl = base_out / "atas_geral.jsonl"
     merged_txt = base_out / "atas_geral.txt"
 
     try:
-        # salva o JSONL consolidado
         with open(merged_jsonl, "w", encoding="utf-8") as jf:
             for entry in all_metadata:
                 jf.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-        # salva o TXT consolidado
         with open(merged_txt, "w", encoding="utf-8") as tf:
             tf.write("Relatório geral consolidado de todas as atas coletadas\n")
             tf.write("=" * 80 + "\n\n")
             for entry in all_metadata:
                 tf.write(f"RPPS: {entry.get('rpps')} ({entry.get('uf')})\n")
-                tf.write(f"Tipo de Reunião: {entry.get('tipo_reuniao')}\n")
+                tf.write(f"Tipo: {entry.get('tipo_reuniao')}\n")
                 tf.write(f"Data: {entry.get('data_reuniao')}\n")
                 tf.write(f"Arquivo: {entry.get('file_name')}\n")
                 tf.write(f"Origem: {entry.get('source_page')}\n")
@@ -114,7 +148,7 @@ def main():
     except Exception as e:
         print(f"Erro ao salvar relatório consolidado: {e}")
 
-    print("Processo finalizado com sucesso!")
+    print("\nProcesso finalizado com sucesso!")
 
 if __name__ == "__main__":
     main()

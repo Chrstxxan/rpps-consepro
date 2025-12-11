@@ -1,7 +1,6 @@
 
-# core/discovery.py
 """
-Discovery universal para RPPS — heurística + Selenium interativo (V3).
+Discovery universal para RPPS — heurística + Selenium interativo (V4).
 
 Mantém API pública:
 - crawl_site(base_url)        → usado pelo app.py
@@ -15,7 +14,7 @@ Objetivo:
   - heurísticas em texto e URL
   - detecção de páginas de download (?cat=7, downloads.php, etc.)
   - Selenium para JS pesado quando necessário
-- Ser genérico o bastante pra escalar para ~3.000 sites.
+- Ser genérico o bastante pra escalar para todos os ~3.000 sites.
 """
 
 import time
@@ -44,7 +43,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 MAX_CRAWL_DEPTH = 3          # profundidade máxima de navegação
 MAX_PAGES_FROM_SITE = 120    # limite de páginas por domínio
 
-REQUEST_TIMEOUT = 20
+REQUEST_TIMEOUT = 5
 MAX_REQUEST_RETRIES = 3
 REQUEST_BACKOFF = (1.5, 3.0)
 
@@ -59,7 +58,7 @@ HEUR_KEYWORDS = [
     "conselho", "consel", "deliberativo", "fiscal",
 ]
 
-# URLs que quase nunca interessam para atas
+# URLs que nunca ou quase nunca interessam para atas
 GLOBAL_BLACKLIST_SUBSTR = [
     "diariomunicipal", "diario-oficial", "diariooficial",
     "licitacao", "licitacoes", "pregao", "compras",
@@ -73,7 +72,7 @@ GLOBAL_BLACKLIST_SUBSTR = [
     "rh", "recursos-humanos",
 ]
 
-# Links de navegação geral que não queremos clicar com Selenium
+# Links de navegação geral para não clicar com Selenium
 NAV_BLACKLIST_TEXT = [
     "portal da transparência", "transparência", "transparencia",
     "ouvidoria", "notícias", "notícias", "noticia", "noticias",
@@ -82,7 +81,7 @@ NAV_BLACKLIST_TEXT = [
     "institucional", "quem somos",
 ]
 
-# Cabeçalhos HTTP com vários user-agents pra rodar mais “humano”
+# Cabeçalhos HTTP com vários user-agents pra evitar block de bot
 REQUEST_HEADERS_LIST = [
     {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"},
@@ -186,7 +185,7 @@ def element_text_score(text: str, href: str) -> int:
     if re.search(r"\b(19|20)\d{2}\b", full):
         score += 6
 
-    # penaliza se for claramente navegação genérica
+    # penalização se for claramente navegação genérica
     if any(x in full for x in ["portal da transparência", "transparência", "transparencia", "ouvidoria", "noticia", "notícias"]):
         score -= 12
 
@@ -256,8 +255,8 @@ def extract_docs_from_html(base_url: str, html: str):
             if is_probably_meeting_document(m.split("/")[-1]):
                 found.append(m)
 
-    # 4) Se a página se parece fortemente com um “hub de downloads” (Jaraguá etc),
-    #    incluímos a própria página como candidata:
+    # 4) Se a página se parece fortemente com um “hub de downloads” (Jaraguá como exemplo),
+    #    inclui a própria página como candidata:
     if is_download_hub_candidate(base_url):
         found.append(base_url)
 
@@ -495,7 +494,7 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
         lower_url = url.lower()
 
         # ------------------------------------------------------------
-        # 0) DETECTOR UNIVERSAL DE PÁGINA DE DETALHE (?id=N)
+        # 0) DETECTOR UNIVERSAL DE PÁGINA DE DETALHE (?id=N) - página cat id
         # ------------------------------------------------------------
         if "id=" in lower_url and "cat=" not in lower_url:
             parsed_path = urlparse(url).path
@@ -515,7 +514,7 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
         html = resp.text if resp else ""
 
         # ------------------------------------------------------------
-        # >>> ISSEM PATCH — DETECÇÃO AUTOMÁTICA DE PAGINAÇÃO CAT → ID
+        # >>> PATCH CAT ID — DETECÇÃO AUTOMÁTICA DE PAGINAÇÃO CAT → ID
         # ------------------------------------------------------------
         if "downloads.php?cat=" in lower_url and html:
             for a in BeautifulSoup(html, "lxml").find_all("a", href=True):
