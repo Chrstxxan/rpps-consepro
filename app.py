@@ -19,42 +19,7 @@ from core.parallel_runner import run_discovery_parallel
 
 # lista de sites base (pags de atas dos municipios)
 RPPS_SITES = [
-    {"name": "IPRESBS São Bento do Sul", "uf": "SC", "url": "https://ipresbs.sc.gov.br/atas-reunioes-categorias/comite-de-investimentos/"},
-    {"name": "IPI Itajaí", "uf": "SC", "url": "https://ipi.itajai.sc.gov.br/atas-comite-de-investimentos"},
-    {"name": "ISSBLU Blumenau", "uf": "SC", "url": "https://www.issblu.sc.gov.br/pagina/90/comite-de-investimento/sub-pagina/13/"},
-    {"name": "IPREVILLE Joinville", "uf": "SC", "url": "https://www.ipreville.sc.gov.br/pagina/56/comite-de-investimentos"},
-    {"name": "NavegantesPrev Navegantes", "uf": "SC", "url": "https://www.navegantesprev.sc.gov.br/"},
-    {"name": "Rio do Sul Prev", "uf": "SC", "url": "https://riodosulprev.sc.gov.br/agenda/visualiza/4"},
-    {"name": "SIMPREVI Chapecó", "uf": "SC", "url": "https://www.chapeco.sc.gov.br/simprevi/comite-de-investimentos"},
-    {"name": "IPRECON Concórdia", "uf": "SC", "url": "https://iprecon.sc.gov.br/atas-comite-de-investimentos/"},
-    {"name": "IBPREV Brusque", "uf": "SC", "url": "https://ibprev.sc.gov.br/atas/?categoria=comite-de-investimentos"},
-    {"name": "IPRESF São Francisco do Sul", "uf": "SC", "url": "https://www.ipresf.sc.gov.br/comissao/comissao/documento-auxiliar/7/14/"},
-    {"name": "PREVBIGUAÇU Biguaçu", "uf": "SC", "url": "http://prevbiguacu.sc.gov.br/atas-c-i-2018"},
-    {"name": "IPRERIO Rio Negrinho", "uf": "SC", "url": "https://www.iprerio.sc.gov.br/comite-investimento"},
-    {"name": "INDAPREV Indaial", "uf": "SC", "url": "https://indaprev.com.br/comite-de-investimento/"},
-    {"name": "IPASC Caçador", "uf": "SC", "url": "https://www.ipasc.cacador.sc.gov.br/paginas.php?p=5"},
-    {"name": "IMPRES Joaçaba", "uf": "SC", "url": "https://impres.sc.gov.br/governanca-corporativa/comite-de-investimentos/atas-de-reunioes/"},
-    {"name": "Camboriú", "uf": "SC", "url": "https://previdencia.camboriu.sc.gov.br/documento?DocumentoSearchForm%5Bid_documento_categoria%5D=4&DocumentoSearchForm%5Bq%5D="},
-    {"name": "IPRESP Balneário Piçarras", "uf": "SC", "url": "https://ipresp.sc.gov.br/governanca-corporativa/conselho-administrativo/atas-de-reunioes/"},
-    {"name": "Pomerode", "uf": "SC", "url": "https://pomerode.atende.net/cidadao/pagina/atas-de-reunioes-do-comite-de-investimentos-fap"},
-    {"name": "LAGESPREVI Lages", "uf": "SC", "url": "https://www.lagesprevi.sc.gov.br/admin-financeiro/12/atas-comite-de-investimentos"},
-    {"name": "IÇARAPREV Içara", "uf": "SC", "url": "https://icaraprev.sc.gov.br/atas/"},
-    {"name": "IPREVE Barra Velha", "uf": "SC", "url": "https://iprevebarravelha.sc.gov.br/artigo/32782/atas-de-reuniao-do-comite-de-investimentos"},
-    {"name": "ICPREV Canoinhas", "uf": "SC", "url": "https://icprev.sc.gov.br/conselhos-e-comite/comite-de-investimento"},
-    {"name": "IPREVIHO Herval d'Oeste", "uf": "SC", "url": "https://ipreviho.sc.gov.br/transparencia"},
-    {"name": "Curitibanos", "uf": "SC", "url": "https://curitibanos.sc.gov.br/estrutura/pagina-6334/pro-gestao/comite-de-investimentos-comin/atas-comin/"},
-    {"name": "IPMM Mafra", "uf": "SC", "url": "https://ipmm.sc.gov.br/atas-e-avaliacoes-do-comin"},
-    {"name": "TAIOPREV Taió", "uf": "SC", "url": "https://taioprev.sc.gov.br/1-3-2-atas/"},
-    {"name": "Itaiópolis", "uf": "SC", "url": "https://itaiopolis.sc.gov.br/"},
-    {"name": "Antonio Carlos", "uf": "SC", "url": "https://antoniocarlos.sc.gov.br/pagina-4365/pagina-23129/"},
-    {"name": "IPBS Balneário Barra do Sul", "uf": "SC", "url": "https://ipbs.sc.gov.br/?pagina=Atas%20Comite%20de%20Investimentos.php&report=2025"},
-    {"name": "IPRECAL Campo Alegre", "uf": "SC", "url": "https://www.iprecal.sc.gov.br/pagina/109/atas-das-reunioes-do-comite-de-investimento"},
-    {"name": "Nova Trento", "uf": "SC", "url": "https://novatrento.sc.gov.br/iprevent-comite-de-investimentos/"},
-    {"name": "Salto Veloso", "uf": "SC", "url": "https://saltoveloso.sc.gov.br/estrutura/pagina-3955/pagina-27388/"},
-    {"name": "RPPS Macieira", "uf": "SC", "url": "https://macieira.sc.gov.br/pagina-12742/"},
-    {"name": "FPMU Umuarama", "uf": "PR", "url": "https://fpmu.umuarama.pr.gov.br/atas-do-comite-apr"},
-    {"name": "IPREV Santa Catarina", "uf": "SC", "url": "https://www.iprev.sc.gov.br/atas-do-comite-de-investimento/"},
-    {"name": "IPPA Palhoça", "uf": "SC", "url": "https://www.ippa.sc.gov.br/publicacoes"}
+    
 ]
 
 def parse_args():

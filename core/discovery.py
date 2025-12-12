@@ -36,6 +36,37 @@ from .downloader import is_probably_meeting_document  # filtro semântico reapro
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+import time
+import threading
+import sys
+import re
+
+skip_current_url = False  # controla pular apenas a URL atual
+
+def listen_for_skip():
+    global skip_current_url
+    for line in sys.stdin:
+        if line.strip() == "":
+            print("[MANUAL SKIP] ENTER detectado → pulando URL atual")
+            skip_current_url = True
+
+# inicia thread
+threading.Thread(target=listen_for_skip, daemon=True).start()
+
+# --- Monitor de travamento ---
+last_progress_time = time.time()
+last_progress_count = 0
+stall_triggered = False
+
+def mark_progress():
+    global last_progress_time, last_progress_count
+    last_progress_time = time.time()
+    last_progress_count += 1
+
+def stall_detected():
+    # Se passou 60s sem progresso real → travou
+    return (time.time() - last_progress_time) > 60
+
 # ----------------------------------------------------------------------
 # Configurações gerais
 # ----------------------------------------------------------------------
@@ -201,8 +232,11 @@ def element_text_score(text: str, href: str) -> int:
 
 def extract_docs_from_html(base_url: str, html: str):
     """
-    Dado HTML de uma página, retorna:
-      - lista de URLs de arquivos (ou páginas-hub altamente candidatas)
+    Extrai links de documentos a partir de HTML, incluindo:
+    - PDFs diretos
+    - DOC/DOCX
+    - links de hubs de download
+    - plugins como WP Download Manager (wpdmdl)
     """
     if not html:
         return []
@@ -210,31 +244,30 @@ def extract_docs_from_html(base_url: str, html: str):
     soup = BeautifulSoup(html, "lxml")
     found = []
 
-    # 1) anchors direto
+    # 1) anchors diretos
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
         abs_url = urljoin(base_url, href)
         text = a.get_text(strip=True) or ""
 
+        # excluir lixo
         if url_blacklisted(abs_url):
             continue
 
-        # se já parece arquivo direto
+        # arquivos diretos
         if looks_like_file(abs_url):
-            # filtro semântico pelo nome do arquivo + texto
             fname = abs_url.split("/")[-1]
             if is_probably_meeting_document(fname) or is_probably_meeting_document(text):
                 found.append(abs_url)
             continue
 
-        # se é link de download/hub
-        if "download" in abs_url.lower() or "arquiv" in abs_url.lower():
-            # se o texto tem cara de ata/reunião, guardamos a própria página-hub também
-            full = (text + " " + abs_url).lower()
+        # páginas de download
+        full = (text + " " + abs_url).lower()
+        if "download" in abs_url.lower() or "arquivo" in abs_url.lower():
             if any(k in full for k in HEUR_KEYWORDS):
                 found.append(abs_url)
 
-    # 2) iframes / embeds / objects
+    # 2) iframe/embed/object
     for tag in soup.find_all(["iframe", "embed", "object"]):
         src = tag.get("src") or tag.get("data")
         if not src:
@@ -249,26 +282,32 @@ def extract_docs_from_html(base_url: str, html: str):
         elif "download" in abs_url.lower():
             found.append(abs_url)
 
-    # 3) padrões de URL em JS bruto
-    for m in re.findall(r'["\'](https?://[^"\']+\.(?:pdf|docx?|xlsx?))["\']', html, flags=re.IGNORECASE):
+    # 3) padrões de PDF embutidos em JS
+    import re
+    for m in re.findall(r'["\'](https?://[^"\']+\.(?:pdf|docx?|xlsx?))["\']', html, flags=re.I):
         if not url_blacklisted(m):
             if is_probably_meeting_document(m.split("/")[-1]):
                 found.append(m)
 
-    # 4) Se a página se parece fortemente com um “hub de downloads” (Jaraguá como exemplo),
-    #    inclui a própria página como candidata:
+    # 4) Hubs tipo downloads.php?cat=xx
     if is_download_hub_candidate(base_url):
         found.append(base_url)
 
-    # dedupe preservando ordem
+    # 5) *** PATCH PARA SITES COM wpdmdl (ex: IPREV/SC) ***
+    wpdmdl_matches = re.findall(r'href=["\']([^"\']+\?wpdmdl=\d+)', html, flags=re.I)
+    for u in wpdmdl_matches:
+        abs_url = urljoin(base_url, u)
+        found.append(abs_url)
+
+    # dedupe
     seen = set()
     out = []
     for u in found:
         if u not in seen:
-            out.append(u)
             seen.add(u)
-    return out
+            out.append(u)
 
+    return out
 
 def extract_internal_links(base_url: str, html: str):
     """
@@ -312,6 +351,72 @@ def extract_internal_links(base_url: str, html: str):
 
     return ordered
 
+# ----------------------------------------------------------------------
+# PATCH B — funções adicionais para guiar Selenium em menus dinâmicos
+# ----------------------------------------------------------------------
+
+def selenium_force_click_tabs(driver):
+    """
+    Clica em abas, menus e botões que frequentemente escondem as atas.
+    """
+    candidates = driver.find_elements(
+        By.XPATH,
+        "//a[contains(.,'Ata') or contains(.,'Reuni') or contains(.,'Arquivo') "
+        "or contains(.,'Comit') or contains(.,'Invest') or contains(.,'Ano') "
+        "or contains(@href, '#') or contains(@class, 'tab') or contains(@class,'active')]"
+    )
+    for el in candidates:
+        try:
+            driver.execute_script("arguments[0].click();", el)
+            time.sleep(0.3)
+        except:
+            pass
+
+
+def selenium_force_select_years(driver):
+    """
+    Seleciona automaticamente dropdowns contendo anos.
+    """
+    selects = driver.find_elements(By.TAG_NAME, "select")
+    for sel in selects:
+        try:
+            options = sel.find_elements(By.TAG_NAME, "option")
+            for op in options:
+                txt = op.text.strip()
+                if txt.isdigit() and len(txt) == 4:
+                    driver.execute_script("arguments[0].selected = true;", op)
+                    op.click()
+                    time.sleep(0.6)
+        except:
+            pass
+
+
+def selenium_force_scroll_and_paginate(driver):
+    """
+    Faz scroll para carregar conteúdo dinâmico e tenta clicar paginações.
+    """
+    # scroll infinito
+    last = 0
+    for _ in range(12):
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(0.4)
+        new = driver.execute_script("return document.body.scrollHeight;")
+        if new == last:
+            break
+        last = new
+
+    # botões de próxima página
+    while True:
+        try:
+            btn = driver.find_element(
+                By.XPATH,
+                "//a[contains(.,'Próximo') or contains(.,'>') "
+                "or contains(@class,'next') or contains(@rel,'next')]"
+            )
+            driver.execute_script("arguments[0].click();", btn)
+            time.sleep(1)
+        except:
+            break
 
 # ----------------------------------------------------------------------
 # Selenium setup e helpers
@@ -337,29 +442,27 @@ def make_driver():
 
 def selenium_render_and_get_html(driver, url: str):
     try:
+        driver.set_page_load_timeout(10)  # evita travar eternamente
         driver.get(url)
         time.sleep(1.5)
-        # scroll leve pra carregar lazyload
+
+        # scroll leve para lazy load
         for _ in range(3):
             driver.execute_script("window.scrollBy(0, document.body.scrollHeight/3);")
             time.sleep(0.3)
+
         return driver.page_source
+
     except Exception as e:
-        print(f"[DISCOVERY] Selenium falhou em {url}: {e}")
+        print(f"[SELENIUM TIMEOUT] Falhou em {url}: {e}")
         return None
 
-
 def selenium_click_promising_and_collect(driver, base_url: str):
-    """
-    Clica apenas em elementos que parecem estar ligados a atas/reuniões.
-    - NÃO clica em menus genéricos, portal da transparência etc.
-    Retorna lista de URLs de docs encontradas após interações.
-    """
     out = []
     try:
         elements = driver.find_elements(By.XPATH, "//a|//button")
     except Exception:
-        elements = []
+        return out
 
     scored = []
     for el in elements:
@@ -368,46 +471,29 @@ def selenium_click_promising_and_collect(driver, base_url: str):
             href = el.get_attribute("href") or ""
             full = (txt + " " + href).lower()
 
-            # pular se claramente menu genérico
             if any(nb in full for nb in NAV_BLACKLIST_TEXT):
                 continue
 
             score = element_text_score(txt, href)
-            if score <= 0:
-                continue
-            scored.append((score, el, txt, href))
-        except Exception:
+            if score > 0:
+                scored.append((score, el))
+        except:
             continue
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    top = scored[:12]  # não exagerar
+    top = scored[:12]
 
-    for score, el, txt, href in top:
+    for score, el in top:
         try:
-            driver.execute_script("arguments[0].scrollIntoView({behavior:'smooth',block:'center'});", el)
+            driver.execute_script("arguments[0].scrollIntoView(true);", el)
             time.sleep(0.2)
-            try:
-                el.click()
-            except Exception:
-                try:
-                    ActionChains(driver).move_to_element(el).click().perform()
-                except Exception:
-                    continue
-            time.sleep(1.0)
-            html_after = driver.page_source
-            out.extend(extract_docs_from_html(base_url, html_after))
-        except Exception:
+            el.click()
+            time.sleep(1)
+            out.extend(extract_docs_from_html(base_url, driver.page_source))
+        except:
             continue
 
-    # dedupe
-    seen = set()
-    final = []
-    for u in out:
-        if u not in seen:
-            seen.add(u)
-            final.append(u)
-    return final
-
+    return list(dict.fromkeys(out))
 
 # ----------------------------------------------------------------------
 # API: extract_links_from_page & selenium_extract_links
@@ -491,6 +577,32 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
             continue
 
         print(f"[DISCOVERY] Visitando {url} (profundidade {depth})")
+        # --- PATCH WPDM: URLs com wpdmdl= não devem ser tratadas como página ---
+        # registramos o link como arquivo e pulamos o processamento/GET/Selenium.
+        if "wpdmdl=" in url.lower():
+            if url not in all_found_files:
+                all_found_files.append(url)
+            print(f"[SKIP][WPDM] Ignorando página dinâmica WPDM: {url}")
+            continue
+        # ---------------------------------------------------------------------
+
+        # --- Monitor de travamento (auto-skip + skip manual) ---
+        # --- skip manual por ENTER ---
+        global skip_current_url
+        if skip_current_url:
+            print(f"[SKIP] Pulando URL (manual): {url}")
+            skip_current_url = False
+            continue
+
+        global skip_current_domain
+        current_domain = domain_of(url)
+
+        # Auto-skip se detectar travamento
+        #if stall_detected():
+            #print(f"[STALL] Nenhum progresso há 60s → pulando {current_domain}")
+            # skip_current_domain = True
+            #continue
+
         lower_url = url.lower()
 
         # ------------------------------------------------------------
@@ -538,6 +650,9 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
             if d not in all_found_files:
                 all_found_files.append(d)
 
+        if static_docs:
+            mark_progress()
+
         # ------------------------------------------------------------
         # 3) fallback Selenium
         # ------------------------------------------------------------
@@ -545,6 +660,15 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
             k in lower_url for k in ["ata", "reuni", "comit", "invest"]
         )
         if driver and looks_promising and not static_docs:
+            # --- PATCH B: expandir interface dinâmica ---
+            try:
+                selenium_force_click_tabs(driver)
+                selenium_force_select_years(driver)
+                selenium_force_scroll_and_paginate(driver)
+            except Exception:
+                pass
+
+            # renderiza HTML após interações
             html_dyn = selenium_render_and_get_html(driver, url)
             if html_dyn:
                 dyn_docs = extract_docs_from_html(url, html_dyn)
@@ -552,6 +676,9 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
                 for d in dyn_docs:
                     if d not in all_found_files:
                         all_found_files.append(d)
+
+                if dyn_docs:
+                    mark_progress()
 
         # ------------------------------------------------------------
         # 4) links internos para continuar o BFS

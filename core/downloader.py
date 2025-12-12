@@ -330,67 +330,175 @@ def _download_binary_response(resp: requests.Response,
 # -------------------------
 # download_single_url
 # -------------------------
-def download_single_url(doc_url: str,
-                        out_path: Path,
-                        rpps_info: dict | None,
-                        seen_hashes: set,
-                        seen_hashes_lock: threading.Lock,
-                        max_html_hops: int = MAX_HTML_HOPS):
-    # GET inicial
-    resp = robust_request("GET", doc_url, referer=doc_url, stream=False)
+def download_single_url(doc_url: str, out_path: str, rpps_info, seen_hashes, seen_hashes_lock):
+    """
+    Baixa um arquivo ou resolve páginas de download indiretas.
+    """
+
+    resp = robust_request("GET", doc_url, referer=rpps_info.get("base_url"), stream=False)
     if not resp:
+        print(f"[DOWNLOAD] Falha GET {doc_url}")
         return None
 
     ct = (resp.headers.get("Content-Type") or "").lower()
 
-    if any(k in ct for k in ["pdf", "word", "officedocument", "octet-stream"]) and "html" not in ct:
-        return _download_binary_response(resp, doc_url, out_path, rpps_info, seen_hashes, seen_hashes_lock)
+    # ============================================================
+    # PATCH: se já for link ?wpdmdl=xxxx → tratar como arquivo direto
+    # ============================================================
+    if "wpdmdl=" in doc_url.lower():
+        # Muitos servidores do WPDM retornam HTML mas o download real vem direto.
+        # Então ignoramos a detecção de CT e baixamos assim mesmo.
+        return _download_binary_response(
+            resp, doc_url, out_path, rpps_info, seen_hashes, seen_hashes_lock
+        )
 
-    if "html" in ct or "<html" in resp.text[:200].lower():
-        html = resp.text
-        candidate_links = extract_candidate_doc_urls_from_html(resp.url, html)
-        if not candidate_links:
-            candidate_links = extract_document_links(resp.url)
+    # ============================================================
+    # CASO 1 — RESPOSTA É PDF DIRETO OU DOCTYPE COMPATÍVEL
+    # ============================================================
+    if "pdf" in ct or any(ext in doc_url.lower() for ext in [".pdf", ".doc", ".docx"]):
+        return _download_binary_response(
+            resp, doc_url, out_path, rpps_info, seen_hashes, seen_hashes_lock
+        )
 
-        # tentar GET nos candidatos (limitado)
-        for cand in candidate_links[:8]:
-            sub_resp = robust_request("GET", cand, referer=resp.url, stream=False)
-            if not sub_resp:
-                continue
-            sub_ct = (sub_resp.headers.get("Content-Type") or "").lower()
-            if any(k in sub_ct for k in ["pdf", "word", "officedocument", "octet-stream"]) and "html" not in sub_ct:
-                return _download_binary_response(sub_resp, cand, out_path, rpps_info, seen_hashes, seen_hashes_lock)
+    html = resp.text or ""
 
-        # PATCH universal para downloads.php?id=...
-        parsed = urlparse(resp.url)
-        qs = parsed.query.lower()
+    # ============================================================
+    # CASO 2 — SERVIDOR DEVOLVE HTML (MESMO QUANDO DEVERIA SER PDF)
+    # ============================================================
+    if "html" in ct or "<html" in html[:200].lower():
 
-        if "id=" in qs and parsed.path.endswith("php"):
-            m = re.search(r"id=([0-9]+)", qs)
-            if m:
-                file_id = m.group(1)
-                endpoint = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-                payload_variants = [
-                    {"id": file_id},
-                    {"codigo": file_id},
-                    {"file": file_id},
-                    {"arquivo": file_id},
-                    {"doc": file_id},
-                    {"op": "download", "codigo": file_id},
-                    {"acao": "download", "codigo": file_id},
-                ]
-                for payload in payload_variants:
-                    resp_file = robust_request("POST", endpoint, referer=resp.url, timeout=REQUEST_TIMEOUT, stream=False, data=payload)
-                    if not resp_file:
-                        continue
-                    ct_file = (resp_file.headers.get("Content-Type") or "").lower()
-                    if any(k in ct_file for k in ["pdf", "msword", "officedocument", "octet-stream"]):
-                        return _download_binary_response(resp_file, endpoint, out_path, rpps_info, seen_hashes, seen_hashes_lock)
+        # ⚠️ IMPORT INTERNO PARA EVITAR IMPORT CIRCULAR
+        from .discovery import extract_docs_from_html
 
+        # -------------------------------------------
+        # PATCH #1 — PDFs embutidos dentro do HTML
+        # -------------------------------------------
+        pdf_links = re.findall(r'https?://[^"\']+\.pdf', html, flags=re.I)
+        if pdf_links:
+            pdf_url = urljoin(doc_url, pdf_links[0])
+            sub = robust_request("GET", pdf_url, referer=doc_url, stream=False)
+            if sub:
+                sub_ct = (sub.headers.get("Content-Type") or "").lower()
+                if "pdf" in sub_ct:
+                    return _download_binary_response(
+                        sub, pdf_url, out_path, rpps_info, seen_hashes, seen_hashes_lock
+                    )
+
+        # -------------------------------------------
+        # PATCH #2 — WPDM (wpdmdl=xxxxx) DOWNLOAD LINKS
+        # -------------------------------------------
+        wpdmdl = re.findall(r'href=["\']([^"\']+\?wpdmdl=\d+)', html, flags=re.I)
+        for w in wpdmdl:
+            real = urljoin(doc_url, w)
+            sub = robust_request("GET", real, referer=doc_url, stream=False)
+            if sub:
+                sub_ct = (sub.headers.get("Content-Type") or "").lower()
+                if "pdf" in sub_ct:
+                    return _download_binary_response(
+                        sub, real, out_path, rpps_info, seen_hashes, seen_hashes_lock
+                    )
+
+        # -------------------------------------------
+        # Tenta extrair links usando o discovery
+        # -------------------------------------------
+        links = extract_docs_from_html(doc_url, html)
+
+        if links:
+            real_url = urljoin(doc_url, links[0])
+            sub = robust_request("GET", real_url, referer=doc_url, stream=False)
+            if sub:
+                sub_ct = (sub.headers.get("Content-Type") or "").lower()
+                if "pdf" in sub_ct or any(ext in real_url.lower() for ext in [".pdf", ".doc", ".docx"]):
+                    return _download_binary_response(
+                        sub, real_url, out_path, rpps_info, seen_hashes, seen_hashes_lock
+                    )
+
+        print(f"[DOWNLOAD] Nenhum documento válido encontrado em {doc_url}")
         return None
+    
+    # ============================================================
+    # CASO DESCONHECIDO — NÃO É HTML NEM PDF
+    # ============================================================
+    print(f"[DOWNLOAD] Tipo desconhecido em {doc_url} CT={ct}")
+    return None
 
-    # fallback: tenta salvar binário estranho
-    return _download_binary_response(resp, doc_url, out_path, rpps_info, seen_hashes, seen_hashes_lock)
+
+    # ============================================================
+    # CASO 1 — RESPOSTA É PDF DIRETO OU DOCTYPE COMPATÍVEL
+    # ============================================================
+    if "pdf" in ct or any(ext in doc_url.lower() for ext in [".pdf", ".doc", ".docx"]):
+        return _download_binary_response(
+            resp, doc_url, out_path, rpps_info, seen_hashes, seen_hashes_lock
+        )
+
+    html = resp.text or ""
+
+    # ============================================================
+    # CASO 2 — SERVIDOR DEVOLVE HTML (MESMO QUANDO DEVERIA SER PDF)
+    # ============================================================
+    if "html" in ct or "<html" in html[:200].lower():
+
+        # ⚠️ IMPORT INTERNO PARA EVITAR IMPORT CIRCULAR
+        from .discovery import extract_docs_from_html
+
+        # -------------------------------------------
+        # PATCH #1 — PDFs embutidos dentro do HTML
+        # -------------------------------------------
+        pdf_links = re.findall(r'https?://[^"\']+\.pdf', html, flags=re.I)
+        if pdf_links:
+            pdf_url = urljoin(doc_url, pdf_links[0])
+            sub = robust_request("GET", pdf_url, referer=doc_url, stream=False)
+            if sub:
+                sub_ct = (sub.headers.get("Content-Type") or "").lower()
+                if "pdf" in sub_ct:
+                    return _download_binary_response(
+                        sub, pdf_url, out_path, rpps_info, seen_hashes, seen_hashes_lock
+                    )
+
+        # -------------------------------------------
+        # PATCH #2 — WPDM (wpdmdl=xxxxx) DOWNLOAD LINKS
+        # -------------------------------------------
+        wpdmdl = re.findall(r'href=["\']([^"\']+\?wpdmdl=\d+)', html, flags=re.I)
+        for w in wpdmdl:
+            real = urljoin(doc_url, w)
+            sub = robust_request("GET", real, referer=doc_url, stream=False)
+            if sub:
+                sub_ct = (sub.headers.get("Content-Type") or "").lower()
+                if "pdf" in sub_ct:
+                    return _download_binary_response(
+                        sub, real, out_path, rpps_info, seen_hashes, seen_hashes_lock
+                    )
+
+        # -------------------------------------------
+        # Tenta extrair links usando o discovery
+        # -------------------------------------------
+        links = extract_docs_from_html(doc_url, html)
+
+        if links:
+            real_url = urljoin(doc_url, links[0])
+            sub = robust_request("GET", real_url, referer=doc_url, stream=False)
+            if sub:
+                sub_ct = (sub.headers.get("Content-Type") or "").lower()
+                if "pdf" in sub_ct or any(ext in real_url.lower() for ext in [".pdf", ".doc", ".docx"]):
+                    return _download_binary_response(
+                        sub, real_url, out_path, rpps_info, seen_hashes, seen_hashes_lock
+                    )
+
+        print(f"[DOWNLOAD] Nenhum documento válido encontrado em {doc_url}")
+        return None
+    
+    # ============================================================
+    # CASO DESCONHECIDO — NÃO É HTML NEM PDF
+    # ============================================================
+    print(f"[DOWNLOAD] Tipo desconhecido em {doc_url} CT={ct}")
+    return None
+
+
+    # ------------------------------
+    # Tipo desconhecido
+    # ------------------------------
+    print(f"[DOWNLOAD] Tipo desconhecido em {doc_url} CT={ct}")
+    return None
 
 # -------------------------
 # download_detail_page

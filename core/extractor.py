@@ -130,36 +130,10 @@ def extract_metadata_from_files(downloaded_files, rpps_info=None):
         file_path = Path(entry["file_path"])
         ext = file_path.suffix.lower()
 
-        # extrair texto conforme formato
-        if ext == ".pdf":
-            text = extract_text_from_pdf(file_path)
-        elif ext in [".html", ".htm"]:
-            text = extract_text_from_html(file_path)
-        elif ext in [".docx", ".doc"]:
-            text = extract_text_from_doc(file_path)
-            if not text:
-                # inválido, vazio ou SKIPPED → pular
-                continue
-        else:
-            continue
+        # NÃO extraímos mais texto — IA fará isso depois
+        text = ""  
 
-        # tipo e data
-        meeting_type = detect_meeting_type(text)
-        meeting_date = extract_meeting_date(text)
-
-        # filtro extra → documentos que não são atas nem reuniões
-        header = (text[:400] or "").lower()
-        if meeting_type == "Desconhecido" and "ata" not in header and "reuni" not in header:
-            continue
-
-        # salvar .txt
-        try:
-            txt_path = file_path.with_suffix(".txt")
-            txt_path.write_text(text or "", encoding="utf-8")
-        except Exception as e:
-            print(f"Erro ao salvar TXT de {file_path}: {e}")
-
-        # metadados
+        # metadados mínimos
         all_metadata.append({
             "rpps": entry.get("rpps") or (rpps_info["name"] if rpps_info else None),
             "uf": entry.get("uf") or (rpps_info["uf"] if rpps_info else None),
@@ -168,8 +142,8 @@ def extract_metadata_from_files(downloaded_files, rpps_info=None):
             "formato": ext,
             "file_url": entry.get("file_url"),
             "source_page": entry.get("source_page"),
-            "tipo_reuniao": meeting_type,
-            "data_reuniao": meeting_date
+            "tipo_reuniao": None,  # IA vai descobrir
+            "data_reuniao": None    # IA vai descobrir
         })
 
     return all_metadata
