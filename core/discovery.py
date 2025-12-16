@@ -22,7 +22,7 @@ import random
 import re
 from collections import deque
 from urllib.parse import urljoin, urlparse, parse_qs
-
+import json
 import requests
 from bs4 import BeautifulSoup
 
@@ -538,6 +538,127 @@ def selenium_extract_links(url: str):
             result.append(u)
     return result
 
+# ============================================================
+# PATCH XHR REPOSITORY — descoberta genérica de APIs /pasta /arquivo
+# ============================================================
+
+COMMON_FOLDER_KEYS = ["idPastaPai", "parentId", "id_pasta", "folderId", "pastaPai"]
+COMMON_FILE_KEYS = ["idPasta", "folderId", "id", "pastaId"]
+
+def looks_like_xhr_repository(base_url: str) -> bool:
+    """
+    Detecta se o site expõe endpoints estilo:
+      POST /pasta/
+      POST /arquivo/
+    sem hardcode de domínio.
+    """
+    base = base_url.rstrip("/")
+
+    for suffix in ("/pasta/", "/arquivo/"):
+        try:
+            r = requests.options(base + suffix, timeout=4, verify=False)
+            if r.status_code in (200, 204):
+                return True
+        except:
+            pass
+    return False
+
+def try_list_folders(api_base: str):
+    payload_variants = [
+        {"idPastaPai": ""},
+        {"idPastaPai": 0},
+        {"idPastaPai": None},
+        {},
+    ]
+
+    for payload in payload_variants:
+        try:
+            r = requests.post(
+                api_base + "/pasta/",
+                json=payload,
+                headers={
+                    **pick_headers(),
+                    "Content-Type": "application/json",
+                    "Referer": api_base + "/"
+                },
+                timeout=6,
+                verify=False
+            )
+            if r.ok:
+                data = r.json()
+                if isinstance(data, list) and data:
+                    print(f"[XHR] Pastas detectadas ({len(data)})")
+                    return data
+        except Exception:
+            continue
+
+    return []
+
+def try_list_files(api_base: str, folder_id):
+    payload_variants = [
+        {"idPasta": folder_id},
+        {"id": folder_id},
+        {"pastaId": folder_id},
+    ]
+
+    for payload in payload_variants:
+        try:
+            r = requests.post(
+                api_base + "/arquivo/",
+                json=payload,
+                headers={
+                    **pick_headers(),
+                    "Content-Type": "application/json",
+                    "Referer": api_base + "/"
+                },
+                timeout=6,
+                verify=False
+            )
+            if r.ok:
+                data = r.json()
+                if isinstance(data, list) and data:
+                    print(f"[XHR] Arquivos detectados ({len(data)})")
+                    return data
+        except Exception:
+            continue
+
+    return []
+
+def extract_xhr_repository_documents(base_url: str):
+    """
+    Pipeline completo:
+      - detecta pastas
+      - lista arquivos
+      - gera URLs finais
+    """
+    api_base = base_url.rstrip("/")
+    found = []
+
+    folders = try_list_folders(api_base)
+    if not folders:
+        return []
+
+    for folder in folders:
+        folder_id = folder.get("id") or folder.get("codigo") or folder.get("folderId")
+        if not folder_id:
+            continue
+
+        files = try_list_files(api_base, folder_id)
+        for f in files:
+            name = f.get("nome") or f.get("name") or ""
+            url = f.get("url") or f.get("downloadUrl")
+
+            if not url:
+                continue
+
+            if not is_probably_meeting_document(name):
+                continue
+
+            full_url = urljoin(api_base + "/", url)
+            found.append(full_url)
+
+    # dedupe
+    return list(dict.fromkeys(found))
 
 # ----------------------------------------------------------------------
 # API principal: crawl_site(base_url)
@@ -555,6 +676,20 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
       - URLs diretas de documentos
       - URLs especiais: detail://<base>|<id>  → para o downloader resolver via POST
     """
+
+    # ============================================================
+    # PATCH XHR REPOSITORY — tentativa ANTES de BFS/Selenium
+    # ============================================================
+    try:
+        if looks_like_xhr_repository(base_url):
+            docs = extract_xhr_repository_documents(base_url)
+            if docs:
+                print(f"[DISCOVERY][XHR] Repositório detectado → {len(docs)} arquivos")
+                return docs
+    except Exception as e:
+        print(f"[DISCOVERY][XHR][ERRO] {e}")
+    # ============================================================
+
     base_domain = domain_of(base_url)
     all_found_files = []
 
@@ -577,8 +712,8 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
             continue
 
         print(f"[DISCOVERY] Visitando {url} (profundidade {depth})")
+
         # --- PATCH WPDM: URLs com wpdmdl= não devem ser tratadas como página ---
-        # registramos o link como arquivo e pulamos o processamento/GET/Selenium.
         if "wpdmdl=" in url.lower():
             if url not in all_found_files:
                 all_found_files.append(url)
@@ -586,7 +721,6 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
             continue
         # ---------------------------------------------------------------------
 
-        # --- Monitor de travamento (auto-skip + skip manual) ---
         # --- skip manual por ENTER ---
         global skip_current_url
         if skip_current_url:
@@ -594,19 +728,10 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
             skip_current_url = False
             continue
 
-        global skip_current_domain
-        current_domain = domain_of(url)
-
-        # Auto-skip se detectar travamento
-        #if stall_detected():
-            #print(f"[STALL] Nenhum progresso há 60s → pulando {current_domain}")
-            # skip_current_domain = True
-            #continue
-
         lower_url = url.lower()
 
         # ------------------------------------------------------------
-        # 0) DETECTOR UNIVERSAL DE PÁGINA DE DETALHE (?id=N) - página cat id
+        # 0) DETECTOR UNIVERSAL DE PÁGINA DE DETALHE (?id=N)
         # ------------------------------------------------------------
         if "id=" in lower_url and "cat=" not in lower_url:
             parsed_path = urlparse(url).path
@@ -617,7 +742,6 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
                     special = f"detail://{url}|{file_id}"
                     if special not in all_found_files:
                         all_found_files.append(special)
-                pass
 
         # ------------------------------------------------------------
         # 1) HTML estático normal
@@ -626,7 +750,7 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
         html = resp.text if resp else ""
 
         # ------------------------------------------------------------
-        # >>> PATCH CAT ID — DETECÇÃO AUTOMÁTICA DE PAGINAÇÃO CAT → ID
+        # PATCH CAT ID — DETECÇÃO AUTOMÁTICA DE PAGINAÇÃO CAT → ID
         # ------------------------------------------------------------
         if "downloads.php?cat=" in lower_url and html:
             for a in BeautifulSoup(html, "lxml").find_all("a", href=True):
@@ -640,7 +764,6 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
                         if special not in all_found_files:
                             print(f"[PATCH FOR CAT.PHP] Detectado ID {file_id} → {abs_url}")
                             all_found_files.append(special)
-        # ------------------------------------------------------------
 
         # ------------------------------------------------------------
         # 2) documentos estaticamente encontrados
@@ -660,7 +783,6 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
             k in lower_url for k in ["ata", "reuni", "comit", "invest"]
         )
         if driver and looks_promising and not static_docs:
-            # --- PATCH B: expandir interface dinâmica ---
             try:
                 selenium_force_click_tabs(driver)
                 selenium_force_select_years(driver)
@@ -668,7 +790,6 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
             except Exception:
                 pass
 
-            # renderiza HTML após interações
             html_dyn = selenium_render_and_get_html(driver, url)
             if html_dyn:
                 dyn_docs = extract_docs_from_html(url, html_dyn)
@@ -705,4 +826,6 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
         if u not in seen:
             seen.add(u)
             final.append(u)
+
     return final
+
