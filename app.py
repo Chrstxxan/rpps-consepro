@@ -19,20 +19,7 @@ from core.parallel_runner import run_discovery_parallel
 
 # lista de sites base (pags de atas dos municipios)
 RPPS_SITES = [
-    {"name": "IPMC Curitiba", "uf": "PR", "url": "https://previdencia.curitiba.pr.gov.br/transparencia/11"}, 
-    {"name": "FPMA Araucária", "uf": "PR", "url": "https://www.fpma.com.br/?pag=ConteudoVP&itm=263"},
-    {"name": "PREVSJP São José dos Pinhais", "uf": "PR", "url": "https://prev.sjp.pr.gov.br/atas-do-cominvest/"}, 
-    {"name": "MaringaPrevidencia", "uf": "PR", "url": "https://www.maringaprevidencia.com.br/ata"},
-    {"name": "ParanaguáPREV", "uf": "PR", "url": "https://www.paranaguaprev.com.br/publicacoes/?idCategoriaPublicacao=61"},
-    {"name": "GuaraPREV Guarapuava", "uf": "PR", "url": "https://guaraprev.com.br/governanca-corporativa/comite-de-investimentos/atas-de-reunioes/"},
-    {"name": "CAPREV Cascavel", "uf": "PR", "url": "https://caprevcascavel.com.br/governanca-corporativa/comite-de-investimentos/atas-de-reunioes/"},
-    {"name": "TOLEDOPREV Toledo", "uf": "PR", "url": "https://toledoprev.toledo.pr.gov.br/institucional/comite-de-investimentos/atas-documentos"},
-    {"name": "FOZPREV Foz do Iguaçu", "uf": "PR", "url": "https://fozprev.pmfi.pr.gov.br/#/site/categorias/menu/70"}, 
-    {"name": "FAZPREV Fazenda Rio Grande", "uf": "PR", "url": "https://fazprev.pr.gov.br/atas-das-reunioes-do-comite-de-investimentos/"},
-    {"name": "Previdencia Campo Largo", "uf": "PR", "url": "https://previdenciacampolargo.atende.net/transparencia/grupo/outras-publicacoes?agg=eyJncnVwbyI6IjI1IiwiaWQiOiIyNF8yIn0%3D"}, 
-    {"name": "Colombo Previdencia", "uf": "PR", "url": "https://www.colomboprevidencia.com.br/ata-investimento/"},
-    {"name": "Pinhais Previdencia", "uf": "PR", "url": "https://pinhaisprevidencia.atende.net/cidadao/pagina/atas-comite-de-investimentos"},
-    {"name": "IPPASA Arapongas", "uf": "PR", "url": "https://arapongas.atende.net/subportal/ippasa#arquivos"} 
+    {"name": "PREVISERTI Tijucas", "uf": "SC", "url": "https://previserti.com.br/"}
 ]
 
 def parse_args():

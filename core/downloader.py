@@ -62,15 +62,13 @@ FILENAME_BLACKLIST = [
     "lei", "decreto", "norma", "normas", "legislacao", "instrucao",
     "boletim", "informativo", "cartilha", "manual", "tutorial", "guia", "orientacao", "folder",
     "cronograma", "calendario", "recadastramento", "cadastro", "prova-de-vida",
-    "planejamento", "politica", "informe", "censo", "organograma", "fluxograma",
+    "planejamento", "informe", "censo", "organograma", "fluxograma",
     "formulario", "requerimento", "solicitacao", "declaracao",
     "termo", "convenio", "contrato", "licitacao", "edital", "concurso", "adesao",
     "noticia", "noticias", "evento", "publicacao", "revista",
     "gabarito", "resultado", "classificacao", "convocacao",
     "estudo", "atuarial", "governanca",
 ]
-
-BLACKLIST_TEXT = ["política de investimentos", "politica de investimentos", "policy"]
 
 # -------------------------
 # Utilitários e helpers
@@ -90,10 +88,6 @@ def is_probably_meeting_document(text_to_check: str) -> bool:
         if term in normalized_name:
             return False
     return True
-
-def is_blacklisted(s: str) -> bool:
-    s = (s or "").lower()
-    return any(b in s for b in BLACKLIST_TEXT)
 
 def get_headers(referer: str | None = None) -> dict:
     h = {
@@ -177,8 +171,6 @@ def extract_candidate_doc_urls_from_html(page_url: str, html: str) -> list[str]:
 
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
-        if is_blacklisted(href):
-            continue
         abs_url = urljoin(page_url, href)
         txt = (a.get_text(strip=True) or "").lower()
 
@@ -217,8 +209,6 @@ def extract_document_links(page_url: str) -> list[str]:
 
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
-        if is_blacklisted(href):
-            continue
         abs_url = urljoin(page_url, href)
 
         if looks_like_doc_url(href):
@@ -335,7 +325,13 @@ def download_single_url(doc_url: str, out_path: str, rpps_info, seen_hashes, see
     Baixa um arquivo ou resolve páginas de download indiretas.
     """
 
-    resp = robust_request("GET", doc_url, referer=rpps_info.get("base_url"), stream=False)
+    resp = robust_request(
+        "GET",
+        doc_url,
+        referer=rpps_info.get("base_url"),
+        stream=False
+    )
+
     if not resp:
         print(f"[DOWNLOAD] Falha GET {doc_url}")
         return None
@@ -343,160 +339,116 @@ def download_single_url(doc_url: str, out_path: str, rpps_info, seen_hashes, see
     ct = (resp.headers.get("Content-Type") or "").lower()
 
     # ============================================================
-    # PATCH: se já for link ?wpdmdl=xxxx → tratar como arquivo direto
+    # CASO 0 — WPDM direto (?wpdmdl=xxxx)
     # ============================================================
     if "wpdmdl=" in doc_url.lower():
-        # Muitos servidores do WPDM retornam HTML mas o download real vem direto.
-        # Então ignoramos a detecção de CT e baixamos assim mesmo.
         return _download_binary_response(
-            resp, doc_url, out_path, rpps_info, seen_hashes, seen_hashes_lock
+            resp, doc_url, out_path, rpps_info,
+            seen_hashes, seen_hashes_lock
         )
 
     # ============================================================
-    # CASO 1 — RESPOSTA É PDF DIRETO OU DOCTYPE COMPATÍVEL
+    # CASO 1 — PDF / DOC direto
     # ============================================================
-    if "pdf" in ct or any(ext in doc_url.lower() for ext in [".pdf", ".doc", ".docx"]):
+    if (
+        "pdf" in ct
+        or any(ext in doc_url.lower() for ext in [".pdf", ".doc", ".docx"])
+    ):
         return _download_binary_response(
-            resp, doc_url, out_path, rpps_info, seen_hashes, seen_hashes_lock
-        )
-
-    html = resp.text or ""
-
-    # ============================================================
-    # CASO 2 — SERVIDOR DEVOLVE HTML (MESMO QUANDO DEVERIA SER PDF)
-    # ============================================================
-    if "html" in ct or "<html" in html[:200].lower():
-
-        # ⚠️ IMPORT INTERNO PARA EVITAR IMPORT CIRCULAR
-        from .discovery import extract_docs_from_html
-
-        # -------------------------------------------
-        # PATCH #1 — PDFs embutidos dentro do HTML
-        # -------------------------------------------
-        pdf_links = re.findall(r'https?://[^"\']+\.pdf', html, flags=re.I)
-        if pdf_links:
-            pdf_url = urljoin(doc_url, pdf_links[0])
-            sub = robust_request("GET", pdf_url, referer=doc_url, stream=False)
-            if sub:
-                sub_ct = (sub.headers.get("Content-Type") or "").lower()
-                if "pdf" in sub_ct:
-                    return _download_binary_response(
-                        sub, pdf_url, out_path, rpps_info, seen_hashes, seen_hashes_lock
-                    )
-
-        # -------------------------------------------
-        # PATCH #2 — WPDM (wpdmdl=xxxxx) DOWNLOAD LINKS
-        # -------------------------------------------
-        wpdmdl = re.findall(r'href=["\']([^"\']+\?wpdmdl=\d+)', html, flags=re.I)
-        for w in wpdmdl:
-            real = urljoin(doc_url, w)
-            sub = robust_request("GET", real, referer=doc_url, stream=False)
-            if sub:
-                sub_ct = (sub.headers.get("Content-Type") or "").lower()
-                if "pdf" in sub_ct:
-                    return _download_binary_response(
-                        sub, real, out_path, rpps_info, seen_hashes, seen_hashes_lock
-                    )
-
-        # -------------------------------------------
-        # Tenta extrair links usando o discovery
-        # -------------------------------------------
-        links = extract_docs_from_html(doc_url, html)
-
-        if links:
-            real_url = urljoin(doc_url, links[0])
-            sub = robust_request("GET", real_url, referer=doc_url, stream=False)
-            if sub:
-                sub_ct = (sub.headers.get("Content-Type") or "").lower()
-                if "pdf" in sub_ct or any(ext in real_url.lower() for ext in [".pdf", ".doc", ".docx"]):
-                    return _download_binary_response(
-                        sub, real_url, out_path, rpps_info, seen_hashes, seen_hashes_lock
-                    )
-
-        print(f"[DOWNLOAD] Nenhum documento válido encontrado em {doc_url}")
-        return None
-    
-    # ============================================================
-    # CASO DESCONHECIDO — NÃO É HTML NEM PDF
-    # ============================================================
-    print(f"[DOWNLOAD] Tipo desconhecido em {doc_url} CT={ct}")
-    return None
-
-
-    # ============================================================
-    # CASO 1 — RESPOSTA É PDF DIRETO OU DOCTYPE COMPATÍVEL
-    # ============================================================
-    if "pdf" in ct or any(ext in doc_url.lower() for ext in [".pdf", ".doc", ".docx"]):
-        return _download_binary_response(
-            resp, doc_url, out_path, rpps_info, seen_hashes, seen_hashes_lock
+            resp, doc_url, out_path, rpps_info,
+            seen_hashes, seen_hashes_lock
         )
 
     html = resp.text or ""
 
     # ============================================================
-    # CASO 2 — SERVIDOR DEVOLVE HTML (MESMO QUANDO DEVERIA SER PDF)
+    # CASO 2 — Servidor devolve HTML
     # ============================================================
-    if "html" in ct or "<html" in html[:200].lower():
+    if "html" in ct or "<html" in html[:300].lower():
 
-        # ⚠️ IMPORT INTERNO PARA EVITAR IMPORT CIRCULAR
+        # ⚠️ import local para evitar import circular
         from .discovery import extract_docs_from_html
 
         # -------------------------------------------
-        # PATCH #1 — PDFs embutidos dentro do HTML
+        # PATCH 1 — PDF embutido direto no HTML
         # -------------------------------------------
-        pdf_links = re.findall(r'https?://[^"\']+\.pdf', html, flags=re.I)
+        pdf_links = re.findall(
+            r'https?://[^"\']+\.pdf',
+            html,
+            flags=re.I
+        )
+
         if pdf_links:
             pdf_url = urljoin(doc_url, pdf_links[0])
-            sub = robust_request("GET", pdf_url, referer=doc_url, stream=False)
+            sub = robust_request(
+                "GET",
+                pdf_url,
+                referer=doc_url,
+                stream=False
+            )
             if sub:
                 sub_ct = (sub.headers.get("Content-Type") or "").lower()
                 if "pdf" in sub_ct:
                     return _download_binary_response(
-                        sub, pdf_url, out_path, rpps_info, seen_hashes, seen_hashes_lock
+                        sub, pdf_url, out_path, rpps_info,
+                        seen_hashes, seen_hashes_lock
                     )
 
         # -------------------------------------------
-        # PATCH #2 — WPDM (wpdmdl=xxxxx) DOWNLOAD LINKS
+        # PATCH 2 — WPDM dentro do HTML
         # -------------------------------------------
-        wpdmdl = re.findall(r'href=["\']([^"\']+\?wpdmdl=\d+)', html, flags=re.I)
-        for w in wpdmdl:
+        wpdmdl_links = re.findall(
+            r'href=["\']([^"\']+\?wpdmdl=\d+)',
+            html,
+            flags=re.I
+        )
+
+        for w in wpdmdl_links:
             real = urljoin(doc_url, w)
-            sub = robust_request("GET", real, referer=doc_url, stream=False)
+            sub = robust_request(
+                "GET",
+                real,
+                referer=doc_url,
+                stream=False
+            )
             if sub:
                 sub_ct = (sub.headers.get("Content-Type") or "").lower()
                 if "pdf" in sub_ct:
                     return _download_binary_response(
-                        sub, real, out_path, rpps_info, seen_hashes, seen_hashes_lock
+                        sub, real, out_path, rpps_info,
+                        seen_hashes, seen_hashes_lock
                     )
 
         # -------------------------------------------
-        # Tenta extrair links usando o discovery
+        # PATCH 3 — usar discovery para achar docs
         # -------------------------------------------
         links = extract_docs_from_html(doc_url, html)
 
         if links:
             real_url = urljoin(doc_url, links[0])
-            sub = robust_request("GET", real_url, referer=doc_url, stream=False)
+            sub = robust_request(
+                "GET",
+                real_url,
+                referer=doc_url,
+                stream=False
+            )
             if sub:
                 sub_ct = (sub.headers.get("Content-Type") or "").lower()
-                if "pdf" in sub_ct or any(ext in real_url.lower() for ext in [".pdf", ".doc", ".docx"]):
+                if (
+                    "pdf" in sub_ct
+                    or any(ext in real_url.lower() for ext in [".pdf", ".doc", ".docx"])
+                ):
                     return _download_binary_response(
-                        sub, real_url, out_path, rpps_info, seen_hashes, seen_hashes_lock
+                        sub, real_url, out_path, rpps_info,
+                        seen_hashes, seen_hashes_lock
                     )
 
         print(f"[DOWNLOAD] Nenhum documento válido encontrado em {doc_url}")
         return None
-    
-    # ============================================================
-    # CASO DESCONHECIDO — NÃO É HTML NEM PDF
-    # ============================================================
-    print(f"[DOWNLOAD] Tipo desconhecido em {doc_url} CT={ct}")
-    return None
 
-
-    # ------------------------------
-    # Tipo desconhecido
-    # ------------------------------
+    # ============================================================
+    # CASO FINAL — tipo desconhecido
+    # ============================================================
     print(f"[DOWNLOAD] Tipo desconhecido em {doc_url} CT={ct}")
     return None
 
@@ -665,84 +617,109 @@ def download_files(file_urls, out_dir, rpps_info=None):
 
     return downloaded
 
-def download_files_parallel(file_urls, out_dir, rpps_info=None, workers=8):
+def download_files_parallel(links, out_path, rpps_info=None, workers=8):
     """
-    Parallel version: mantém assinatura compatível.
-    - Limita por domínio usando semáforos.
-    - Usa ThreadPoolExecutor.
-    - Seen-hashes thread-safe.
+    Baixa arquivos em paralelo com deduplicação persistente por conteúdo.
+    Evita baixar novamente arquivos já salvos em execuções anteriores,
+    independentemente de nome ou URL.
     """
-    out_path = Path(out_dir)
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import json
+    import requests
+
     out_path.mkdir(parents=True, exist_ok=True)
 
-    # preparar lista (tqdm e reuso)
-    urls = list(file_urls)
+    # ------------------------------------------------------------
+    # HASH INDEX — carregar histórico persistente
+    # ------------------------------------------------------------
+    hash_index_path = out_path / ".hash_index.json"
 
-    # locks / shared state
-    seen_hashes: set = set()
-    seen_hashes_lock = threading.Lock()
-    results = []
-    results_lock = threading.Lock()
-
-    # progress bar (thread-safe update via manual)
-    total = len(urls)
-    pbar = tqdm(total=total, desc="Baixando arquivos (paralelo)")
-
-    def worker(doc_url):
+    if hash_index_path.exists():
         try:
-            url = str(doc_url)
-            # filtros genéricos
-            if any(s in url for s in ["facebook.com", "instagram.com", "twitter.com", "x.com", "linkedin.com", "whatsapp.com"]):
+            with open(hash_index_path, "r", encoding="utf-8") as f:
+                persisted_hashes = set(json.load(f).keys())
+            print(f"[HASH_INDEX] {len(persisted_hashes)} hashes carregados do histórico")
+        except Exception as e:
+            print(f"[HASH_INDEX][ERRO] Falha ao ler histórico: {e}")
+            persisted_hashes = set()
+    else:
+        persisted_hashes = set()
+
+    # hashes já vistos (execuções anteriores + atual)
+    seen_hashes = set(persisted_hashes)
+
+    downloaded_files = []
+
+    # ------------------------------------------------------------
+    # Worker de download individual
+    # ------------------------------------------------------------
+    def download_one(entry):
+        nonlocal seen_hashes
+
+        # entry é uma URL (string)
+        url = str(entry)
+
+        try:
+            resp = requests.get(url, timeout=20, verify=False)
+            if not resp.ok or not resp.content:
                 return None
 
-            parsed = urlparse(url)
-            path = parsed.path.lower()
-            qs = parsed.query.lower()
-            domain = get_domain(url)
-            sem = _get_domain_semaphore(domain)
+            content = resp.content
+            file_hash = sha1_bytes(content)
 
-            # adquiri semáforo por domínio (bloco curto)
-            with sem:
-                # regra id= (GET direto)
-                if not url.startswith("detail://") and "id=" in qs:
-                    entry = download_single_url(url, out_path, rpps_info, seen_hashes, seen_hashes_lock)
-                    return entry
+            # --- DEDUPE GLOBAL (inclui execuções passadas) ---
+            if file_hash in seen_hashes:
+                print(f"[SKIP][DUPLICADO] {url}")
+                return None
 
-                # ignora navegação
-                if not url.startswith("detail://"):
-                    if not any(path.endswith(ext) for ext in DOC_EXTS):
-                        nav_tokens = ["cat=", "y=", "m=", "ano=", "mes=", "page=", "p="]
-                        if any(tok in qs for tok in nav_tokens):
-                            return None
+            seen_hashes.add(file_hash)
 
-                # detail://
-                if url.startswith("detail://"):
-                    return download_detail_page(url, out_path, rpps_info, seen_hashes, seen_hashes_lock)
+            # nome seguro baseado no hash
+            filename = f"doc_{file_hash[:12]}.pdf"
+            file_path = out_path / filename
 
-                # fallback
-                return download_single_url(url, out_path, rpps_info, seen_hashes, seen_hashes_lock)
+            with open(file_path, "wb") as f:
+                f.write(content)
+
+            return {
+                "file_path": str(file_path),
+                "file_url": url,
+                "rpps": rpps_info["name"] if rpps_info else None,
+                "uf": rpps_info["uf"] if rpps_info else None,
+            }
+
         except Exception as e:
-            print(f"[PARALLEL][ERRO DOWNLOAD] {doc_url}: {e}")
+            print(f"[DOWNLOAD][ERRO] {url}: {e}")
             return None
-        finally:
-            # atualizar progress (sempre)
-            pbar.update(1)
 
-    # limite global de workers
-    max_workers = min(max(1, workers), GLOBAL_CONCURRENCY)
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = [ex.submit(worker, u) for u in urls]
-        for fut in as_completed(futures):
-            try:
-                res = fut.result()
-                if res:
-                    with results_lock:
-                        results.append(res)
-            except Exception as e:
-                print(f"[PARALLEL][FUTURE ERR] {e}")
+    # ------------------------------------------------------------
+    # Execução paralela
+    # ------------------------------------------------------------
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(download_one, link) for link in links]
 
-    pbar.close()
-    return results
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                downloaded_files.append(result)
+
+    # ------------------------------------------------------------
+    # Persistir HASH INDEX atualizado
+    # ------------------------------------------------------------
+    try:
+        with open(hash_index_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {h: True for h in seen_hashes},
+                f,
+                ensure_ascii=False,
+                indent=2
+            )
+        print(f"[HASH_INDEX] Histórico atualizado ({len(seen_hashes)} hashes)")
+    except Exception as e:
+        print(f"[HASH_INDEX][ERRO] Falha ao salvar histórico: {e}")
+
+    return downloaded_files
 
 # -------------------------
 # Small utility: quick CLI test
