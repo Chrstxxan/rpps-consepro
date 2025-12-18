@@ -32,8 +32,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # -------------------------
 # Configuráveis (tune aqui)
 # -------------------------
-REQUEST_TIMEOUT = 20
-REQUEST_RETRIES = 3
+REQUEST_TIMEOUT = 10
+REQUEST_RETRIES = 2
 REQUEST_BACKOFF = (1.0, 2.0)  # multiplicative backoff factor between retries
 MAX_HTML_HOPS = 2
 DOC_EXTS = (".pdf", ".doc", ".docx", ".htm", ".html", ".xlsx", ".xls")

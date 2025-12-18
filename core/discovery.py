@@ -117,7 +117,6 @@ REQUEST_HEADERS_LIST = [
                    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"},
 ]
 
-
 # ----------------------------------------------------------------------
 # Helpers básicos
 # ----------------------------------------------------------------------
@@ -439,20 +438,39 @@ def make_driver():
 
 
 def selenium_render_and_get_html(driver, url: str):
+    """
+    Renderiza uma página com Selenium de forma segura.
+    - Timeout rígido
+    - Fail-safe: mata o driver em caso de erro
+    - Nunca bloqueia o fluxo do crawler
+    """
+
     try:
-        driver.set_page_load_timeout(10)  # evita travar eternamente
+        # timeouts rígidos
+        driver.set_page_load_timeout(15)
+        driver.set_script_timeout(15)
+
         driver.get(url)
         time.sleep(1.5)
 
         # scroll leve para lazy load
         for _ in range(3):
-            driver.execute_script("window.scrollBy(0, document.body.scrollHeight/3);")
-            time.sleep(0.3)
+            driver.execute_script(
+                "window.scrollBy(0, document.body.scrollHeight/3);"
+            )
+            time.sleep(0.4)
 
         return driver.page_source
 
     except Exception as e:
-        print(f"[SELENIUM TIMEOUT] Falhou em {url}: {e}")
+        print(f"[SELENIUM FAIL] {url}: {e}")
+
+        # FAIL-SAFE: mata o driver para não travar o processo
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
         return None
 
 def selenium_click_promising_and_collect(driver, base_url: str):
@@ -809,168 +827,179 @@ def crawl_site(base_url: str, max_depth: int = MAX_CRAWL_DEPTH):
     visited = set()
     driver = make_driver()
 
-    # ============================================================
-    # PATCH ATENDE.NET — documentos EMBUTIDOS no HTML inicial
-    # ============================================================
+    sitemap_used = False
+
     try:
-        if is_atende_net(base_url):
-            print("[DISCOVERY][ATENDE] Detectado site Atende.net")
+        while queue and len(visited) < MAX_PAGES_FROM_SITE:
 
-            # ⚠️ NÃO clicar em nada
-            driver.get(base_url)
-            time.sleep(2)
+            url, depth = queue.popleft()
 
-            html = driver.page_source
+            if url in visited:
+                continue
+            visited.add(url)
 
-            docs = extract_atende_embedded_documents(html, base_url)
+            if depth > max_depth:
+                continue
+            if url_blacklisted(url):
+                continue
+            if domain_of(url) != base_domain:
+                continue
 
-            if docs:
-                print(
-                    f"[DISCOVERY][ATENDE] "
-                    f"{len(docs)} documentos encontrados (HTML inicial)"
-                )
-                return docs
-            else:
-                print("[DISCOVERY][ATENDE] Nenhum documento encontrado no HTML inicial")
+            print(f"[DISCOVERY] Visitando {url} (profundidade {depth})")
 
-    except Exception as e:
-        print(f"[DISCOVERY][ATENDE][ERRO] {e}")
-    # ============================================================
+            # ------------------------------------------------------------
+            # PATCH WPDM — tratar como arquivo direto
+            # ------------------------------------------------------------
+            if "wpdmdl=" in url.lower():
+                if url not in all_found_files:
+                    all_found_files.append(url)
+                continue
 
-    # ===================== BFS NORMAL ===========================
-    while queue and len(visited) < MAX_PAGES_FROM_SITE:
+            # ------------------------------------------------------------
+            # Skip manual
+            # ------------------------------------------------------------
+            global skip_current_url
+            if skip_current_url:
+                skip_current_url = False
+                continue
 
-        # FAIL-FAST
-        if stall_detected():
-            print(
-                "[DISCOVERY][STALL] "
-                "Sem progresso real por muito tempo — abortando BFS do site"
-            )
-            break
+            lower_url = url.lower()
 
-        url, depth = queue.popleft()
-
-        if url in visited:
-            continue
-        visited.add(url)
-
-        if depth > max_depth:
-            continue
-        if url_blacklisted(url):
-            continue
-        if domain_of(url) != base_domain:
-            continue
-
-        print(f"[DISCOVERY] Visitando {url} (profundidade {depth})")
-
-        # PATCH WPDM
-        if "wpdmdl=" in url.lower():
-            if url not in all_found_files:
-                all_found_files.append(url)
-            print(f"[SKIP][WPDM] Ignorando página dinâmica WPDM: {url}")
-            continue
-
-        # Skip manual
-        global skip_current_url
-        if skip_current_url:
-            print(f"[SKIP] Pulando URL (manual): {url}")
-            skip_current_url = False
-            continue
-
-        lower_url = url.lower()
-
-        # Detector de detail (?id=)
-        if "id=" in lower_url and "cat=" not in lower_url:
-            parsed_path = urlparse(url).path
-            if not any(parsed_path.lower().endswith(ext) for ext in DOC_EXTS):
-                m = re.search(r"id=(\d+)", lower_url)
-                if m:
-                    special = f"detail://{url}|{m.group(1)}"
-                    if special not in all_found_files:
-                        all_found_files.append(special)
-
-        # HTML estático
-        resp = safe_get(url)
-        html = resp.text if resp else ""
-
-        # CAT.PHP
-        if "downloads.php?cat=" in lower_url and html:
-            for a in BeautifulSoup(html, "lxml").find_all("a", href=True):
-                href = a["href"].strip()
-                if "id=" in href:
-                    abs_url = urljoin(url, href)
-                    m = re.search(r"id=(\d+)", abs_url)
+            # ------------------------------------------------------------
+            # Detector universal de página de detalhe (?id=)
+            # ------------------------------------------------------------
+            if "id=" in lower_url and "cat=" not in lower_url:
+                parsed_path = urlparse(url).path
+                if not any(parsed_path.lower().endswith(ext) for ext in DOC_EXTS):
+                    m = re.search(r"id=(\d+)", lower_url)
                     if m:
-                        special = f"detail://{abs_url}|{m.group(1)}"
+                        special = f"detail://{url}|{m.group(1)}"
                         if special not in all_found_files:
                             all_found_files.append(special)
 
-        # Docs estáticos
-        static_docs = extract_docs_from_html(url, html)
-        for d in static_docs:
-            if d not in all_found_files:
-                all_found_files.append(d)
+            # ------------------------------------------------------------
+            # HTML estático
+            # ------------------------------------------------------------
+            resp = safe_get(url)
+            html = resp.text if resp else ""
 
-        if static_docs:
-            mark_progress()
+            # ------------------------------------------------------------
+            # PATCH CAT ID
+            # ------------------------------------------------------------
+            if "downloads.php?cat=" in lower_url and html:
+                for a in BeautifulSoup(html, "lxml").find_all("a", href=True):
+                    href = a["href"].strip()
+                    if "id=" in href:
+                        abs_url = urljoin(url, href)
+                        m = re.search(r"id=(\d+)", abs_url)
+                        if m:
+                            special = f"detail://{abs_url}|{m.group(1)}"
+                            if special not in all_found_files:
+                                all_found_files.append(special)
 
-        # Selenium fallback genérico
-        looks_promising = any(
-            k in lower_url
-            for k in ["ata", "reuni", "comit", "invest", "politica", "política"]
-        )
+            # ------------------------------------------------------------
+            # Documentos encontrados no HTML
+            # ------------------------------------------------------------
+            static_docs = extract_docs_from_html(url, html)
+            for d in static_docs:
+                if d not in all_found_files:
+                    all_found_files.append(d)
 
-        if driver and looks_promising and not static_docs:
+            # ------------------------------------------------------------
+            # Selenium fallback genérico
+            # ------------------------------------------------------------
+            looks_promising = any(
+                k in lower_url
+                for k in ["ata", "reuni", "comit", "invest", "politica", "política"]
+            )
+
+            if driver and looks_promising and not static_docs:
+                try:
+                    selenium_force_click_tabs(driver)
+                    selenium_force_select_years(driver)
+                    selenium_force_scroll_and_paginate(driver)
+                except Exception:
+                    pass
+
+                html_dyn = selenium_render_and_get_html(driver, url)
+                if html_dyn:
+                    dyn_docs = extract_docs_from_html(url, html_dyn)
+                    dyn_docs.extend(
+                        selenium_click_promising_and_collect(driver, url)
+                    )
+                    for d in dyn_docs:
+                        if d not in all_found_files:
+                            all_found_files.append(d)
+
+            # ------------------------------------------------------------
+            # BFS — links internos
+            # ------------------------------------------------------------
+            html_for_links = html or ""
+            if not html_for_links and driver:
+                html_for_links = selenium_render_and_get_html(driver, url) or ""
+
+            internal_scored = extract_internal_links(url, html_for_links)
+
+            for _, next_url in internal_scored:
+                if next_url not in visited and depth + 1 <= max_depth:
+                    queue.append((next_url, depth + 1))
+
+        # ============================================================
+        # SITEMAP FALLBACK — tentativa única, sem recursão
+        # ============================================================
+        if not all_found_files and not sitemap_used:
+            sitemap_used = True
             try:
-                selenium_force_click_tabs(driver)
-                selenium_force_select_years(driver)
-                selenium_force_scroll_and_paginate(driver)
+                sitemap_urls = discover_sitemap_urls(base_url)
+                filtered = filter_relevant_sitemap_urls(sitemap_urls)
+
+                if filtered:
+                    print(
+                        f"[SITEMAP] {len(filtered)} URLs relevantes encontradas — processando"
+                    )
+
+                    for url in filtered:
+                        if url not in visited:
+                            queue.append((url, 1))
+
+                    while queue and len(visited) < MAX_PAGES_FROM_SITE:
+
+                        url, depth = queue.popleft()
+
+                        if url in visited:
+                            continue
+                        visited.add(url)
+
+                        if depth > max_depth:
+                            continue
+                        if url_blacklisted(url):
+                            continue
+                        if domain_of(url) != base_domain:
+                            continue
+
+                        print(f"[DISCOVERY][SITEMAP] Visitando {url}")
+
+                        resp = safe_get(url)
+                        html = resp.text if resp else ""
+
+                        docs = extract_docs_from_html(url, html)
+                        for d in docs:
+                            if d not in all_found_files:
+                                all_found_files.append(d)
+
+            except Exception as e:
+                print(f"[SITEMAP][ERRO] {e}")
+
+    finally:
+        if driver:
+            try:
+                driver.quit()
             except Exception:
                 pass
 
-            html_dyn = selenium_render_and_get_html(driver, url)
-            if html_dyn:
-                dyn_docs = extract_docs_from_html(url, html_dyn)
-                dyn_docs.extend(
-                    selenium_click_promising_and_collect(driver, url)
-                )
-                for d in dyn_docs:
-                    if d not in all_found_files:
-                        all_found_files.append(d)
-
-                if dyn_docs:
-                    mark_progress()
-
-        # BFS links internos
-        html_for_links = html or ""
-        if not html_for_links and driver:
-            html_for_links = selenium_render_and_get_html(driver, url) or ""
-
-        internal_scored = extract_internal_links(url, html_for_links)
-        for _, next_url in internal_scored:
-            if next_url not in visited and depth + 1 <= max_depth:
-                queue.append((next_url, depth + 1))
-
-    if driver:
-        try:
-            driver.quit()
-        except Exception:
-            pass
-
-    # SITEMAP fallback
-    if not all_found_files:
-        try:
-            sitemap_urls = discover_sitemap_urls(base_url)
-            filtered = filter_relevant_sitemap_urls(sitemap_urls)
-
-            if filtered:
-                print(f"[SITEMAP] {len(filtered)} URLs relevantes injetadas")
-                return crawl_site(base_url, max_depth=max_depth)
-
-        except Exception as e:
-            print(f"[SITEMAP][ERRO] {e}")
-
+    # ------------------------------------------------------------
     # DEDUPE FINAL
+    # ------------------------------------------------------------
     seen = set()
     final = []
     for u in all_found_files:

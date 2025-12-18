@@ -19,7 +19,7 @@ from core.parallel_runner import run_discovery_parallel
 
 # lista de sites base (pags de atas dos municipios)
 RPPS_SITES = [
-    {"name": "PREVISERTI Tijucas", "uf": "SC", "url": "https://previserti.com.br/"}
+    {"name": "INPREVID Videira", "uf": "SC", "url": "https://inprevid.sc.gov.br/"}
 ]
 
 def parse_args():
@@ -71,7 +71,7 @@ def main():
             links,
             base_path,
             rpps_info=site,
-            workers=8
+            workers=6
         )
 
         # extrai metadados e analisa tipo e data das reuniões
